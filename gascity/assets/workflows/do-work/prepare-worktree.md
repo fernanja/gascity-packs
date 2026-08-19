@@ -21,7 +21,13 @@ setup only. Do not edit source files in the launcher checkout.
 3. Validate context path {{context_path}}, files ownership, and verification
    policy for the resolved source anchor.
 4. Create or reuse a deterministic git worktree at
-   `$(pwd)/worktrees/<source-anchor-id>`, based on the up-to-date remote
+   `$GC_CITY/.gc/worktrees/$GC_RIG/<source-anchor-id>` (create the parent
+   directory with `mkdir -p` first; hard-fail if `$GC_CITY` or `$GC_RIG` is
+   unset). This is the city-managed layout swept by the daemon's closed-bead
+   worktree reaper (`[daemon] auto_reap_closed_bead_worktrees`); worktrees at
+   the former `$(pwd)/worktrees/<source-anchor-id>` rig-root location are
+   outside the reaper's scope and accumulate forever. Base the worktree on
+   the up-to-date remote
    default branch — never the launcher's local `HEAD`, which may be behind
    `origin`. If the path is missing:
    - Resolve the remote default branch (do not hardcode `main`). Read the

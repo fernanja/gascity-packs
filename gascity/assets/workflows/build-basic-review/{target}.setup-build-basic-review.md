@@ -21,9 +21,10 @@ anchors from the implementation summary `trace.upstream` entries whose paths are
 `gc bd show "<source-anchor-id>" --json`, handle both an object and a one-element
 list, and read `metadata.work_dir`. Verify every `work_dir` is an absolute
 existing git worktree and is different from the launcher root. If metadata is
-missing but `<launcher-root>/worktrees/<source-anchor-id>` exists and is a git
-worktree, record that recovered worktree and include a setup warning in the
-context. If no implementation worktree can be resolved, close this setup bead
+missing, check `$GC_CITY/.gc/worktrees/<rig>/<source-anchor-id>` and then the
+legacy `<launcher-root>/worktrees/<source-anchor-id>`; if either exists and is
+a git worktree, record that recovered worktree and include a setup warning in
+the context. If no implementation worktree can be resolved, close this setup bead
 with `gc.outcome=fail` and record the missing source-anchor/worktree evidence.
 
 The context body must include an `## Implementation Worktrees` section before
