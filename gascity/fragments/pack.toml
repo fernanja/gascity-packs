@@ -1,0 +1,11 @@
+# gc-fragments: the shared, public prompt template fragments — and NOTHING
+# else. Exists so packs that need the gc-role-worker claim-protocol fragment
+# (gc-roles, and any derived pack) can import fragments WITHOUT importing the
+# full gascity parent: importing the parent re-exported its skills/ into every
+# consumer, deploying a duplicate "gc.mayor" alias beside the canonical
+# city-level "gascity.mayor" registration, and the loader's export/transitive
+# knobs are compatibility no-ops (fernanja gc city, 2026-08-20).
+[pack]
+name = "gc-fragments"
+version = "0.1.0"
+schema = 2

@@ -762,7 +762,7 @@ class FormulaAssetTests(unittest.TestCase):
 
     def test_role_agent_prompts_embed_shared_claim_protocol(self) -> None:
         root = pathlib.Path(__file__).resolve().parents[1]
-        fragment = root / "template-fragments" / "gc-role-worker.template.md"
+        fragment = root / "fragments" / "template-fragments" / "gc-role-worker.template.md"
         text = fragment.read_text(encoding="utf-8")
         include = '{{ template "gc-role-worker" . }}'
 

@@ -27,7 +27,7 @@ BUILD_BASE_ANCHORS = base_contract.BUILD_BASE_STEPS
 
 CLAIM_PROTOCOL_INCLUDE = '{{ template "gc-role-worker" . }}'
 PUBLIC_CLAIM_FRAGMENT = (
-    GASCITY_ROOT / "template-fragments" / "gc-role-worker.template.md"
+    GASCITY_ROOT / "fragments" / "template-fragments" / "gc-role-worker.template.md"
 )
 
 # Pack-local prompt surfaces that the factory actually executes. Vendored
@@ -333,7 +333,7 @@ class DerivedPackCompatibilityTests(unittest.TestCase):
             (GASCITY_ROOT / "roles" / "pack.toml").read_text(encoding="utf-8")
         )
         self.assertTrue(PUBLIC_CLAIM_FRAGMENT.is_file())
-        self.assertEqual(roles_pack["imports"]["gc"]["source"], "..")
+        self.assertEqual(roles_pack["imports"]["gc"]["source"], "../fragments")
 
         for pack_name in DERIVED_PACKS:
             pack_root = PACKS_ROOT / pack_name

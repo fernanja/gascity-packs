@@ -3,11 +3,12 @@ name = "gc-roles"
 version = "0.1.0"
 schema = 2
 
-# The parent import exists ONLY for the shared gc-role-worker prompt template
-# that every role's prompt.template.md invokes. export=false keeps it internal:
-# without it, importing gc-roles re-exports the parent's skills/ into every
-# consumer, deploying a duplicate "gc.mayor" alias beside the canonical
-# city-level "gascity.mayor" registration (fernanja gc city, 2026-08-20).
+# The gc import targets ../fragments — the fragment-only sub-pack — NOT the
+# gascity parent. The roles need exactly one parent asset (the public
+# gc-role-worker claim-protocol fragment); importing the whole parent
+# re-exported its skills/ into every consumer as a duplicate "gc.mayor"
+# alias beside the canonical city-level "gascity.mayor" registration
+# (fernanja gc city, 2026-08-20). Single-source contract unchanged: the
+# fragment lives once, in gc-fragments, and no pack carries a copy.
 [imports.gc]
-source = ".."
-export = false
+source = "../fragments"
