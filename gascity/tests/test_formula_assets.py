@@ -754,7 +754,14 @@ class FormulaAssetTests(unittest.TestCase):
         self.assertEqual({path.parent.name for path in paths}, ROLE_AGENTS)
         for path in paths:
             data = tomllib.loads(path.read_text(encoding="utf-8"))
-            self.assertEqual(data["scope"], "rig")
+            # implementation-worker is deliberately unscoped (city + rig
+            # expansion contexts) so city-scope beads route to the same
+            # worker role — one worker pattern, no separate city pool
+            # (operator decision 2026-08-20). All other roles stay rig-scoped.
+            if path.parent.name == "implementation-worker":
+                self.assertNotIn("scope", data)
+            else:
+                self.assertEqual(data["scope"], "rig")
             self.assertTrue(data["fallback"])
             self.assertNotIn("provider", data, f"{path} must inherit the city/workspace provider by default")
             self.assertTrue((path.parent / "prompt.template.md").is_file())
