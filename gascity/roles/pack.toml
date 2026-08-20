@@ -3,5 +3,11 @@ name = "gc-roles"
 version = "0.1.0"
 schema = 2
 
+# The parent import exists ONLY for the shared gc-role-worker prompt template
+# that every role's prompt.template.md invokes. export=false keeps it internal:
+# without it, importing gc-roles re-exports the parent's skills/ into every
+# consumer, deploying a duplicate "gc.mayor" alias beside the canonical
+# city-level "gascity.mayor" registration (fernanja gc city, 2026-08-20).
 [imports.gc]
 source = ".."
+export = false
