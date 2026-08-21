@@ -18,11 +18,15 @@ root or parent beads, searches, mail, logs, or repository context.
 
 Read its single JSON result:
 
-- `action=work`: save the returned identifiers exactly as follows, then execute
-  that bead's description and result contract only:
-  - `bead_id` as `CLAIMED_BEAD_ID`
-  - `root_bead_id` as `CLAIMED_ROOT_BEAD_ID`
-  - `continuation_group` as `CLAIMED_CONTINUATION_GROUP`
+- `action=work`: save the returned identifiers, then execute that bead's
+  description and result contract only:
+  - `bead_id` as `CLAIMED_BEAD_ID` — always present.
+  - `root_bead_id` as `CLAIMED_ROOT_BEAD_ID` and `continuation_group` as
+    `CLAIMED_CONTINUATION_GROUP` — save when the key is present. As of
+    2026-08 the claim result frequently omits both keys entirely; a missing
+    key means unknown, not "no root" / "no group". Never treat a missing key
+    as a signal by itself — see Continue, which does not depend on these
+    being set.
 - `action=drain`: already drain-acked. Exit now.
 - Non-zero exit or malformed result: report failure. Do not search, hand-repair
   assignment, or retry forever. Do not drain or mutate claim state; the command
@@ -66,19 +70,21 @@ gc bd close "$CLAIMED_BEAD_ID" --reason '...'
 
 ## Continue
 
-After close, inspect `CLAIMED_CONTINUATION_GROUP` before another claim:
+After close, claim again immediately. Do not gate this on
+`CLAIMED_CONTINUATION_GROUP`: that field is frequently absent from the claim
+result (see Claim), so an empty value never means "no more work" — it as
+often means "not reported." The next claim call's own `action` is the only
+authoritative stop/go signal:
 
-- An empty continuation group is a hard session boundary. Run
-  `gc runtime drain-ack` and exit so unrelated work starts with clean context.
-- For a non-empty group, run `gc hook --claim --drain-ack --json` again unless
-  the result contract requires final drain. On `action=drain`, exit.
+- `action=work`: execute it immediately, even if its continuation group or
+  root differs from the bead just closed. Never drain or ask for
+  confirmation after a successful claim. Execute claimed teardown work even
+  after earlier failure.
+- `action=drain`: already drain-acked. Exit now.
 
-Every successful claim result is authoritative. Execute it immediately even if
-its continuation group or root differs from the bead just closed; never drain
-or ask for confirmation after a successful claim. Execute claimed teardown
-work even after earlier failure.
-
-For explicit drain:
+Do not call `gc runtime drain-ack` on your own initiative after a close —
+only when a result contract explicitly directs a final drain, or after a
+claim call itself returns `action=drain`:
 
 ```bash
 gc runtime drain-ack
