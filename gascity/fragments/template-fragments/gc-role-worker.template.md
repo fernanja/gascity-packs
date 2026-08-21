@@ -47,11 +47,21 @@ Honor bead's requested `gc.outcome` metadata. If no failure contract exists,
 record unrecoverable failure as `gc.outcome=fail` plus concise
 `gc.failure_class` and reason.
 
+`gc bd close` also enforces a separate, warn-only work-record gate: set
+`gc.work_outcome` to one of `shipped|no-op|blocked|abandoned`, and when it is
+`shipped`, also set `gc.work_commit` to the commit sha that shipped. This is
+independent of `gc.outcome` (pass/fail) — set both. If no single value or
+commit honestly fits (e.g. several refs touched, nothing merged to one sha),
+pick the closest honest value and explain the mismatch in the close reason
+rather than leaving it unset or inventing a misleading commit.
+
 Set required metadata before closing same claimed bead:
 
 ```bash
 gc bd update "$CLAIMED_BEAD_ID" \
   --set-metadata 'gc.outcome=pass' \
+  --set-metadata 'gc.work_outcome=shipped' \
+  --set-metadata 'gc.work_commit=<sha>' \
   --set-metadata 'example.key=example-value'
 gc bd close "$CLAIMED_BEAD_ID"
 ```
