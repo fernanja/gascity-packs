@@ -28,6 +28,16 @@ anchor boundary, run sandboxed verification from inside the worktree, and make a
 focused commit in the worktree. Leave the source anchor open for
 `close-source-anchor`; close only this implementation step when done.
 
+The launcher checkout's `main` is never a valid commit target, including
+under pressure to unblock validation. If verification needs code that
+appears unreachable from `main` (an earlier item's commit orphaned, a
+sibling worktree's work not yet merged), that is a signal to re-resolve
+`WORKTREE`/the source anchor or fail the step with a clear diagnostic — not
+license to cherry-pick, merge, or otherwise commit anything onto the shared
+rig root's checked-out branch to make validation pass locally. The only path
+from a worktree to `main` is a GitHub PR through the pack's normal publish
+step; nothing before that step may write to `main` directly, for any reason.
+
 Write or update the task summary with these schema-required body sections,
 using the exact `##` headings below in this order:
 
