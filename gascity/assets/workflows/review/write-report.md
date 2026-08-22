@@ -2,6 +2,24 @@
 Write the review verdict report to {{report_path}} with pass/fail, findings,
 missing evidence, and recommended fixes for subject {{subject_path}}.
 
+For each implementation item under review, its implementation summary is
+required to record a final proof command of `make preflight` (or
+`make preflight-fast`) with the observed exit code — this is the rig's full
+local-CI-equivalent gate, and a passing run is what lets CI trust local
+verification instead of re-running everything. Check it explicitly:
+
+- Missing entirely (no final proof command recorded, or it isn't
+  `make preflight`/`make preflight-fast`): treat as missing evidence — the
+  verdict cannot be `approved`.
+- Recorded with a non-zero exit code: this is a required finding. The verdict
+  must be `changes_required`, naming the failing item and quoting the
+  recorded failure.
+- Recorded with exit code 0: cite it as passing evidence for that item.
+
+This is the only place a preflight failure is gated — do not re-run preflight
+yourself here, and do not invent a separate fix loop; a `changes_required`
+verdict already routes through this workflow's existing repair-review stage.
+
 The requested review authority is `{{review_mode}}`: in `report` mode, write
 findings and verdicts without mutating code; in `agent` mode, also include a
 structured fix handoff for the caller's review-fix formula to apply; in

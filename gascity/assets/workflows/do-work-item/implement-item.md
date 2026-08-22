@@ -24,6 +24,18 @@ using the exact `##` headings below in this order:
 The `## Verification` section must include both the first verification command
 and the final proof command, with the observed pass/fail result.
 
+The final proof command MUST be `make preflight` (or `make preflight-fast` when
+the rig defines that target instead), run from the worktree root after all
+other verification. This is the rig's full local-CI-equivalent gate; running
+it here — before push, before CI — is what lets CI trust local verification
+instead of re-running everything from a red start. Record the exact exit
+code. Report the result honestly whether it passes or fails: this step's own
+close condition depends only on the artifact-schema validator below, not on
+whether preflight itself passed — do not retry or attempt code fixes here on
+a preflight failure alone, and do not withhold `gc.outcome=pass` because of
+one. A failing preflight is downstream review's finding to raise and repair-
+review's loop to fix, not a second retry mechanism nested inside this step.
+
 Write the summary as a `gc.build.implementation-summary.v1` artifact and record
 its absolute path on the workflow root bead as `gc.implementation.summary_path`
 before closing.
