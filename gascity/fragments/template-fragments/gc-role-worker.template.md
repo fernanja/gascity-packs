@@ -102,6 +102,18 @@ gc runtime drain-ack
 
 Then exit. Never claim "drained" without acknowledgement.
 
+## Shell commands
+
+Never run a command that attaches or blocks in the foreground as your only
+action — `docker compose up` with no `-d`, a bare dev server, `tail -f`, or
+anything else designed to run until interrupted rather than exit on its
+own. If a command does not return control by itself, background it and
+poll for the outcome instead of waiting on it synchronously. A blocking
+foreground call has no timeout here: it wedges the claimed bead, and
+anything single-lane behind it in the same drain, with no automatic
+recovery (2026-08-23, gcas-ddqmia: `make start` ran `docker compose up`
+with no `-d` and blocked a claim for 8h+ this way).
+
 ## Invariants
 
 - `gc.kind=workflow` and `gc.kind=scope`: latch beads, not normal work.
