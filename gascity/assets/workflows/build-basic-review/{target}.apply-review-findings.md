@@ -1,10 +1,13 @@
 Apply build-basic starter review findings.
 
 Use implementation target {{implementation_target}} for any code changes. Read
-the starter review synthesis. If all three review lanes approve, write a no-op
+the starter review synthesis. If all four review lanes approve, write a no-op
 review summary. If required fixes or missing evidence remain, make the smallest
 focused changes, run the relevant proof commands, and write the review-fix
-summary under the build artifact root.
+summary under the build artifact root. For a preflight iterate specifically,
+the fix is whatever `make preflight`/`make preflight-fast` reported failing —
+fix the code, then re-run it yourself in the worktree before writing the
+summary; do not just describe the failure back.
 
 Apply fixes to the implementation source anchor/worktree named in the review
 context, not to the launcher rig root. An unchanged root checkout is not itself
@@ -28,9 +31,9 @@ is explicit.
 
 Contract: `gc.work_dir` is the launcher rig root, not the implementation worktree.
 
-Set `code_review.verdict=done` only when acceptance, test evidence, and
-simplicity all approve after this pass. Set `code_review.verdict=iterate` when
-required fixes remain.
+Set `code_review.verdict=done` only when acceptance, test evidence,
+simplicity, and preflight all approve after this pass. Set
+`code_review.verdict=iterate` when required fixes remain.
 
 Always close with `gc.outcome=pass`,
 `code_review.verdict=done|iterate`,
