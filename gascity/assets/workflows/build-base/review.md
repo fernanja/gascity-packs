@@ -5,6 +5,17 @@ test evidence. Treat gap-analysis as one review lens inside this
 post-implementation loop, not as a separate lifecycle stage. Findings must be
 actionable and tied to concrete files, commands, or artifact paths.
 
+As part of this review, actually run the rig's full local-CI-equivalent gate
+yourself in the implementation worktree (not the launcher checkout) — `make
+preflight-fast` if the worktree's Makefile defines that target, otherwise
+`make preflight` — and record the exact command and its outcome. Do not
+accept or forward a prose claim about preflight from the implementation stage
+as a substitute for running it here: that was tried and verified live to be
+attention-dependent, not guaranteed (one re-review caught a missing run, an
+identical re-review of a different item did not). A failing run is a required
+fix, not missing evidence — findings must state what failed and where, not
+that proof is absent.
+
 The requested review authority is `review_mode` {{review_mode}}. In `report`
 mode, write findings and verdicts without mutating code. In `agent` mode, also
 produce a structured fix handoff (findings plus fix guidance) that the caller's

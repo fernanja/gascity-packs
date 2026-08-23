@@ -161,19 +161,21 @@ LANE_STATUS="$(printf '%s\n' "$MATCHES" | jq -r \
     | {
         acceptance: (."code_review.acceptance_verdict" // ""),
         test_evidence: (."code_review.test_evidence_verdict" // ""),
-        simplicity: (."code_review.simplicity_verdict" // "")
+        simplicity: (."code_review.simplicity_verdict" // ""),
+        preflight: (."code_review.preflight_verdict" // "")
       }
   ] as $rows
   | {
       acceptance: ([$rows[].acceptance | select(. != "")] | last // ""),
       test_evidence: ([$rows[].test_evidence | select(. != "")] | last // ""),
-      simplicity: ([$rows[].simplicity | select(. != "")] | last // "")
+      simplicity: ([$rows[].simplicity | select(. != "")] | last // ""),
+      preflight: ([$rows[].preflight | select(. != "")] | last // "")
     } as $latest
-  | if ($latest.acceptance != "" or $latest.test_evidence != "" or $latest.simplicity != "") then
-      if (approved($latest.acceptance) and approved($latest.test_evidence) and approved($latest.simplicity)) then
+  | if ($latest.acceptance != "" or $latest.test_evidence != "" or $latest.simplicity != "" or $latest.preflight != "") then
+      if (approved($latest.acceptance) and approved($latest.test_evidence) and approved($latest.simplicity) and approved($latest.preflight)) then
         "approved"
       else
-        "iterate: acceptance=\($latest.acceptance // "<missing>") test_evidence=\($latest.test_evidence // "<missing>") simplicity=\($latest.simplicity // "<missing>")"
+        "iterate: acceptance=\($latest.acceptance // "<missing>") test_evidence=\($latest.test_evidence // "<missing>") simplicity=\($latest.simplicity // "<missing>") preflight=\($latest.preflight // "<missing>")"
       end
     else
       ""

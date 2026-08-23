@@ -1,8 +1,10 @@
 Synthesize the build-basic starter factory review.
 
-Read the acceptance, test evidence, and simplicity review reports. Deduplicate
-findings, preserve the source review lane for each finding, and classify each
-item as required fix, missing evidence, or residual risk.
+Read the acceptance, test evidence, simplicity, and local-preflight review
+reports. Deduplicate findings, preserve the source review lane for each
+finding, and classify each item as required fix, missing evidence, or
+residual risk. Treat a preflight iterate as a required fix, not missing
+evidence — the lane ran the command itself, so a failure is a real defect.
 
 Also read `gc.build.code_review_context_path` from the workflow root bead. When
 you carry a finding forward, include the source anchor and implementation
