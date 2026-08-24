@@ -1848,6 +1848,34 @@ class FormulaAssetTests(unittest.TestCase):
             with self.subTest(fragment=fragment):
                 self.assertIn(fragment, text)
 
+    def test_preflight_review_instruction_stays_synchronized(self) -> None:
+        # build-base and build-from-review-base are separate root formulas
+        # (see GC-METH-016 / GC-METH-001) that each carry their own copy of
+        # this instruction in their own review.md, because formula step
+        # description_file content only supports flat {varname} substitution
+        # (internal/formula: substituteVars/substituteExpandedDescription) --
+        # there is no {{define}}/{{template}} include mechanism for step
+        # markdown the way gc-role-worker.template.md has for role prompts.
+        # Real DRY (one file, included twice) isn't available without a
+        # framework change; this test is the enforced substitute -- it fails
+        # loudly the moment one copy is edited without the other, instead of
+        # silently drifting the way it did before 2026-08-23.
+        root = pathlib.Path(__file__).resolve().parents[1]
+        preflight_instruction_core = (
+            "As part of this review, actually run the rig's full local-CI-equivalent gate\n"
+            "yourself in the implementation worktree (not the launcher checkout) — `make\n"
+            "preflight-fast` if the worktree's Makefile defines that target, otherwise\n"
+            "`make preflight` — and record the exact command and its outcome. Do not\n"
+            "accept or forward a prose claim about preflight from the implementation stage\n"
+            "as a substitute for running it here: that was tried and verified live to be\n"
+            "attention-dependent, not guaranteed (one re-review caught a missing run, an\n"
+            "identical re-review of a different item did not)."
+        )
+        for formula in ("build-base", "build-from-review-base"):
+            with self.subTest(formula=formula):
+                text = effective_formula_text(root, formula)
+                self.assertIn(preflight_instruction_core, text)
+
     def test_default_continuation_entrypoints_extend_suffix_bases(self) -> None:
         root = pathlib.Path(__file__).resolve().parents[1]
         expected = {
