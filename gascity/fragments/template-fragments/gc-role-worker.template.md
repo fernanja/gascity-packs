@@ -114,6 +114,20 @@ anything single-lane behind it in the same drain, with no automatic
 recovery (2026-08-23, gcas-ddqmia: `make start` ran `docker compose up`
 with no `-d` and blocked a claim for 8h+ this way).
 
+## Git discipline
+
+If your work involves a git commit: a rig's checked-out `main` (or other
+default branch) is never a valid commit target, for any reason, including
+under pressure to unblock validation against code that looks unreachable
+from it. That is a signal to re-resolve your worktree or fail the task with
+a clear diagnostic, not license to commit, cherry-pick, or merge anything
+onto the shared checkout's own branch (2026-08-22, real incident: an
+apply-fixes step did exactly this to unblock itself). Work in an isolated
+worktree and open a PR; nothing before that PR may write to the default
+branch directly. Some rigs also enforce this mechanically with a pre-commit
+hook — if a commit is refused for this reason, that is the hook working
+correctly, not an error to work around.
+
 ## Invariants
 
 - `gc.kind=workflow` and `gc.kind=scope`: latch beads, not normal work.
