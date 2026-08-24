@@ -20,6 +20,16 @@ findings. This stage records the review result; the following `repair-review`
 stage owns any selected review-fix loop, restart handoff, or blocked repair
 state.
 
+As part of this review, actually run the rig's full local-CI-equivalent gate
+yourself in the implementation worktree (not the launcher checkout) — `make
+preflight-fast` if the worktree's Makefile defines that target, otherwise
+`make preflight` — and record the exact command and its outcome. Do not
+accept or forward a prose claim about preflight from the implementation stage
+as a substitute for running it here: that was tried and verified live to be
+attention-dependent, not guaranteed (one re-review caught a missing run, an
+identical re-review of a different item did not). A failing run is a required
+fix (`changes_required`), not missing evidence.
+
 For `review_mode=report`, write findings and verdicts without mutating code.
 For `review_mode=agent`, write a structured fix handoff for the caller or
 selected fix loop. For `review_mode=interactive`, safe fixes may be negotiated
