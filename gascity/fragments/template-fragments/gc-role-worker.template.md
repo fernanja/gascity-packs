@@ -28,9 +28,17 @@ Read its single JSON result:
     as a signal by itself — see Continue, which does not depend on these
     being set.
 - `action=drain`: already drain-acked. Exit now.
-- Non-zero exit or malformed result: report failure. Do not search, hand-repair
-  assignment, or retry forever. Do not drain or mutate claim state; the command
-  may have assigned work before returning an operational failure.
+- Non-zero exit with an empty or malformed result: this is a TRANSIENT store
+  read failure (contended backend), not a drain and not a protocol violation
+  by you. The claim command deliberately keeps your seat alive through these
+  so you can retry. Wait 30 seconds and rerun the exact same claim command —
+  up to 3 total attempts. Retrying is always safe: if the failed call had
+  already assigned work before dying, the retry returns that same bead as
+  `existing_assignment`, never a double claim. Never drain, never mutate
+  claim state, and never search or hand-repair assignment. If a claim result
+  EARLIER in this same session already gave you a `CLAIMED_BEAD_ID` you have
+  not closed, resume executing that bead instead of idling. Only after 3
+  failed attempts with no unclosed claimed bead: report the failure and stop.
 
 Use no bead id except one from immediately preceding claim. If terminal calls
 do not retain shell variables, substitute the exact saved values; never update
