@@ -2182,6 +2182,47 @@ class FormulaAssetTests(unittest.TestCase):
                 with self.subTest(asset=relative_path, fragment=fragment):
                     self.assertIn(fragment, text)
 
+    def test_per_item_implement_steps_require_worktree_scoped_summary_write(
+        self,
+    ) -> None:
+        """gc-6svtga: do-work/implement.md and implementation-base/implement.md
+        (plus their do-work-item/implementation-item-base per-item twins)
+        required source reads/edits/tests/hashes/commits to happen inside
+        $WORKTREE but left the implementation-summary artifact write itself
+        unconstrained -- a worker wrote it to the launcher checkout instead
+        (ascent gcas-6e5qjw, 2026-08-27), which close-source-anchor correctly
+        rejected as a source-anchor mismatch, cascading a multi-step failure.
+        Root-level rollup steps (implement/summarize.md,
+        build-base/summarize-implementation.md) are deliberately excluded:
+        their job is to aggregate potentially-multiple items' summaries into
+        a single root-level artifact, so a launcher/artifact_root-side write
+        is correct for those, not a bug.
+        """
+        root = pathlib.Path(__file__).resolve().parents[1]
+        for relative_path in (
+            "assets/workflows/do-work/implement.md",
+            "assets/workflows/do-work-item/implement-item.md",
+            "assets/workflows/implementation-base/implement.md",
+            "assets/workflows/implementation-item-base/implement-item.md",
+        ):
+            text = (root / relative_path).read_text(encoding="utf-8")
+            # Normalize whitespace before matching: this prose wraps at each
+            # file's own pre-existing column width, so the exact newline
+            # position within the sentence differs per file (confirmed by
+            # this test itself failing on an un-normalized exact-substring
+            # check, on a different word boundary in each of the four
+            # files) -- collapsing runs of whitespace to a single space
+            # matches the sentence's actual content regardless of wrap
+            # point, rather than guessing at a wrap-safe fragment boundary.
+            normalized = " ".join(text.split())
+            with self.subTest(asset=relative_path):
+                self.assertIn(
+                    "Write this artifact inside `$WORKTREE`, never the launcher checkout",
+                    normalized,
+                )
+            with self.subTest(asset=relative_path, fragment="gc-6svtga"):
+                self.assertIn("gc-6svtga", normalized)
+
     def test_build_basic_review_context_is_worktree_anchored(self) -> None:
         root = pathlib.Path(__file__).resolve().parents[1]
         workflow_dir = root / "assets" / "workflows" / "build-basic-review"

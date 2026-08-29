@@ -52,7 +52,12 @@ and the final proof command, with the observed pass/fail result.
 
 Write the summary as a `gc.build.implementation-summary.v1` artifact and record
 its absolute path on the workflow root bead as `gc.implementation.summary_path`
-before closing.
+before closing. Write this artifact inside `$WORKTREE`, never the launcher
+checkout — the same boundary that applies to source reads, edits, tests,
+hashes, and commits above applies to this write too (gc-6svtga: a launcher-
+checkout write here caused close-source-anchor to correctly reject the
+evidence as a mismatch, cascading a multi-step failure the workflow only
+recovered from via a later re-validation).
 Include a Markdown coverage table. The validator only recognizes a table with
 an `ID` column and a `Status` column. Use this shape:
 

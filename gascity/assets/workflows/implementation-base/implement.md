@@ -23,7 +23,12 @@ nothing before that step may write to `main` directly, for any reason.
 
 Write the per-item implementation summary as a `gc.build.implementation-summary.v1`
 artifact and record its absolute path on the workflow root bead as
-`gc.implementation.summary_path` before closing.
+`gc.implementation.summary_path` before closing. Write this artifact inside
+`$WORKTREE`, never the launcher checkout — the same boundary that applies to
+source reads, edits, tests, hashes, and commits above applies to this write
+too (gc-6svtga: a launcher-checkout write here caused close-source-anchor to
+correctly reject the evidence as a mismatch, cascading a multi-step failure
+the workflow only recovered from via a later re-validation).
 
 The summary body must contain these exact schema-required `##` headings in this
 order:
