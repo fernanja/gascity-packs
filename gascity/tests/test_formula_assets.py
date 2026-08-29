@@ -1844,6 +1844,18 @@ class FormulaAssetTests(unittest.TestCase):
             "gc.outcome=fail",
             "Do not close the workflow root with `gc.outcome=pass`",
             "Publishing disabled or no-op status must never convert",
+            # gc-0v22om: the engine derives the whole workflow's terminal
+            # outcome from the graph SINK step's own claimed-bead outcome
+            # (publish, for this formula) -- not from the workflow root's
+            # metadata. Root-only instructions let a worker record a
+            # correct "blocked" root while still closing its own claimed
+            # step (finalize/repair-review/publish) with gc.outcome=pass,
+            # because "the step ran without an internal error" and "the
+            # reviewed work was approved" are different things. Confirmed
+            # against two real incidents (gcas-4iopbg, gcas-vezqmb) where
+            # exactly this happened -- see gc-0v22om.
+            "close THIS step's own claimed bead",
+            "with the same outcome",
         ):
             with self.subTest(fragment=fragment):
                 self.assertIn(fragment, text)

@@ -40,7 +40,13 @@ approval, record `gc.build.repair_status=approved` and the final review report
 path. On blocked or exhausted attempts, record `gc.build.repair_status=blocked`
 or `gc.build.repair_status=exhausted`, `gc.outcome=fail`,
 `gc.failure_class=review_repair_failed`, and restart metadata with
-`gc.restart.entrypoint=build-from-review`.
+`gc.restart.entrypoint=build-from-review` on the workflow root -- then also
+close THIS step's own claimed bead with the same outcome: `gc bd update
+"<claimed-step-id>" --set-metadata "gc.outcome=fail"`, then `gc bd close
+"<claimed-step-id>" --reason "<concise reason>"`. As with the report-mode path
+above, the bounded repair loop completing its attempts without an internal
+error is not the same as approval -- do not leave this step's own claimed bead
+at a default/pass outcome while recording blocked/exhausted on the root.
 
 If any prerequisite review artifact, implementation evidence, or selected
 formula is missing, do not invent a pass. Record `gc.build.repair_status=blocked`,

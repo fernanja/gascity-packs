@@ -18,11 +18,17 @@ other than `not_needed` or `approved`. In those cases, write a final report with
 `status: blocked`, record `gc.outcome=fail`, `gc.build.status=blocked`,
 `gc.failure_class` with the machine-readable reason, and preserve restart
 metadata such as `gc.restart.entrypoint`, `gc.restart.reason`, and the relevant
-artifact paths.
+artifact paths on the workflow root -- then also close THIS step's own claimed
+bead with the same outcome: `gc bd update "<claimed-step-id>" --set-metadata
+"gc.outcome=fail"`, then `gc bd close "<claimed-step-id>" --reason "<concise
+reason>"`. Synthesizing a correct blocked report is not the same as the
+underlying work being approved -- do not leave this step's own claimed bead at
+a default/pass outcome while reporting blocked on the root.
 
-Only record a passing terminal outcome when all prerequisite artifacts exist,
-implementation evidence is present, review is approved, and repair status is
-`not_needed` or `approved`.
+Only record a passing terminal outcome (on both the workflow root and this
+step's own claimed bead) when all prerequisite artifacts exist, implementation
+evidence is present, review is approved, and repair status is `not_needed` or
+`approved`.
 
 Record terminal outcome metadata on the workflow root before closing so the
 publish step can safely no-op, push, open a PR, or block with an explicit
