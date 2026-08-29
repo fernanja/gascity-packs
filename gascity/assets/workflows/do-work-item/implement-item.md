@@ -48,7 +48,9 @@ review's loop to fix, not a second retry mechanism nested inside this step.
 
 Write the summary as a `gc.build.implementation-summary.v1` artifact and record
 its absolute path on the workflow root bead as `gc.implementation.summary_path`
-before closing.
+before closing. Write this artifact inside `$WORKTREE`, never the launcher
+checkout — the same boundary that applies to source reads, edits, tests,
+hashes, and commits above applies to this write too (gc-6svtga).
 Include a Markdown coverage table. The validator only recognizes a table with
 an `ID` column and a `Status` column. Use this shape:
 
