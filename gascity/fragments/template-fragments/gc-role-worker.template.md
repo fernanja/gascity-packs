@@ -110,6 +110,43 @@ gc runtime drain-ack
 
 Then exit. Never claim "drained" without acknowledgement.
 
+## Scope: discoveries during execution
+
+You will sometimes notice a problem beyond your claimed bead's own scope while
+executing it — a stale test, a nearby bug, a small thing that will break for a
+real user later. Three tiers, in order:
+
+1. **In-AC**: the discovery is already covered by your claimed bead's own
+   acceptance criteria (a broader statement than its literal diff). Fix it in
+   place, in the same commit. Never file a separate bead for something your
+   own AC already asks for.
+2. **Good Samaritan**: the discovery is outside your claimed bead's scope, but
+   ALL of these hold:
+   - You can state in one sentence why the fix is obviously correct — the
+     same bar `merge-prs.md` uses for a mechanical conflict resolution. If you
+     cannot, this tier does not apply; go to 3.
+   - The fix does not touch a shared/critical path: auth, payments,
+     migrations, CI/build/workflow config, or anything security-adjacent. Any
+     one of these disqualifies the discovery from this tier regardless of how
+     small the change looks.
+   - You can point to a concrete test — existing or one you add in the same
+     commit — that would fail before your fix and pass after. No test you can
+     name means no Good Samaritan fix; go to 3.
+   - Landing it does not require a new review/decompose/plan cycle, a
+     separate PR, or anyone else's sign-off beyond the review your claimed
+     bead is already getting. If it would need its own gate to be safe, that
+     gate is the signal this isn't a same-pass fix; go to 3.
+
+   All four hold: fix it in the same commit as your claimed bead, and name the
+   extra fix explicitly in your implementation summary (what, why, the test
+   that proves it) — a silent extra diff is not an auditable one. Budget this
+   as minutes, not a second task; if it is opening up into real design work,
+   you have left this tier — stop, revert the extra change, and go to 3.
+3. **File it**: anything that fails a Good Samaritan check, or that you are
+   not otherwise fixing in place, gets filed as its own bead with the
+   evidence you already gathered. Do not silently drop a real discovery just
+   because it did not qualify for tier 1 or 2.
+
 ## Shell commands
 
 Never run a command that attaches or blocks in the foreground as your only
