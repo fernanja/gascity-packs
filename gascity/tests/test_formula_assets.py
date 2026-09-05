@@ -775,21 +775,21 @@ class FormulaAssetTests(unittest.TestCase):
 
         for required in (
             "only work-discovery command",
-            "may have assigned work before returning",
+            "already assigned work before dying",
             "gc hook --claim --drain-ack --json",
             "`gc bd mol current`",
             "CLAIMED_BEAD_ID",
             "CLAIMED_ROOT_BEAD_ID",
             "CLAIMED_CONTINUATION_GROUP",
             "gc runtime drain-ack",
-            "An empty continuation group is a hard session boundary",
+            'an empty value never means "no more work"',
             "Never ask a human whether to proceed after a successful claim",
-            "Every successful claim result is authoritative",
+            "authoritative stop/go signal",
             "Set required metadata before closing same claimed bead",
             'gc bd update "$CLAIMED_BEAD_ID"',
             'gc bd close "$CLAIMED_BEAD_ID"',
             "Review findings, missing tests, or follow-up usually are output",
-            "After close, inspect `CLAIMED_CONTINUATION_GROUP`",
+            "After close, claim again immediately",
             'Never claim "drained" without acknowledgement',
         ):
             with self.subTest(required=required):
