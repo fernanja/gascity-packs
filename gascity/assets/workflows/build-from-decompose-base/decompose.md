@@ -18,6 +18,8 @@ convoy.
 
 Write the decomposition artifact to `{{decomposition_path}}` when supplied; otherwise write it under `{{artifact_root}}` as the default decomposition artifact. The decomposition must include work item IDs, requirement and plan traceability, expected files or formula assets, verification expectations, dependencies, skipped work, and blocked work with rationale.
 
+When a task's description references code or output produced by another numbered task in the same plan (e.g. task 4.2 needs the scaffold task 1.2 builds, or the API task 2.3 exposes), a real `bd dep <prerequisite-bead> --blocks <dependent-bead>` dependency must gate the dependent task's dispatch — do not rely on sequential or thematic numbering in the artifact's prose to imply that ordering. Sibling worktrees do not share code until merge, so a downstream task whose only ordering signal is prose numbering can be scheduled and dispatched in parallel with, or ahead of, work it structurally cannot proceed without, burning implementation attempts against a prerequisite that has not landed on the target branch yet (gc-6ccy3q). Wire these `bd dep` calls when creating the work-item beads below, using the traceability already captured in the decomposition artifact to identify which pairs need one.
+
 Record the implementation convoy ID on the workflow root bead as both:
 
 - `gc.input_convoy_id=<implementation-convoy-id>` for the drain contract.
