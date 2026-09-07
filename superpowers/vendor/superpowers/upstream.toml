@@ -14,5 +14,4 @@ vendored_paths = [
   "skills/test-driven-development",
   "skills/verification-before-completion",
   "skills/using-git-worktrees",
-  "skills/systematic-debugging",
 ]
