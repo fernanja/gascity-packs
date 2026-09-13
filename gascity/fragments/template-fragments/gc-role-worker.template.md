@@ -120,32 +120,41 @@ real user later. Three tiers, in order:
    acceptance criteria (a broader statement than its literal diff). Fix it in
    place, in the same commit. Never file a separate bead for something your
    own AC already asks for.
-2. **Good Samaritan**: the discovery is outside your claimed bead's scope, but
-   ALL of these hold:
-   - You can state in one sentence why the fix is obviously correct — the
-     same bar `merge-prs.md` uses for a mechanical conflict resolution. If you
-     cannot, this tier does not apply; go to 3.
-   - The fix does not touch a shared/critical path: auth, payments,
-     migrations, CI/build/workflow config, or anything security-adjacent. Any
-     one of these disqualifies the discovery from this tier regardless of how
-     small the change looks.
-   - You can point to a concrete test — existing or one you add in the same
-     commit — that would fail before your fix and pass after. No test you can
-     name means no Good Samaritan fix; go to 3.
-   - Landing it does not require a new review/decompose/plan cycle, a
-     separate PR, or anyone else's sign-off beyond the review your claimed
-     bead is already getting. If it would need its own gate to be safe, that
-     gate is the signal this isn't a same-pass fix; go to 3.
+2. **Good Samaritan — JFDI (Just Fucking Do It)**: the discovery is outside
+   your claimed bead's scope, but it is incremental, you are highly confident
+   in the fix, and it is 15 minutes of work or less. Just fucking do it: fix
+   it in the same pass, in the same branch as your claimed bead, instead of
+   filing a follow-up bead. Filing a bead for a 15-minute fix is the failure
+   mode here, not the safe default — every follow-up bead re-enters dispatch
+   with a full plan/review workflow, and a flurry of them from one work item
+   buries the factory under heavy workflows landing one-line fixes.
+   Ownership means the worker who found it fixes it.
 
-   All four hold: fix it in the same commit as your claimed bead, and name the
-   extra fix explicitly in your implementation summary (what, why, the test
-   that proves it) — a silent extra diff is not an auditable one. Budget this
-   as minutes, not a second task; if it is opening up into real design work,
-   you have left this tier — stop, revert the extra change, and go to 3.
-3. **File it**: anything that fails a Good Samaritan check, or that you are
-   not otherwise fixing in place, gets filed as its own bead with the
-   evidence you already gathered. Do not silently drop a real discovery just
-   because it did not qualify for tier 1 or 2.
+   Qualifying bar — all three, judged honestly:
+   - **High confidence**: you can state in one sentence why the fix is
+     obviously correct.
+   - **Incremental**: small, self-contained diff — no design work, no new
+     dependency, no API/schema change.
+   - **≤15 minutes**: including verifying it. If it is still growing at the
+     15-minute mark, stop, revert the extra change, and go to 3.
+
+   Disqualifiers — any one sends it to tier 3 regardless of how small the
+   diff looks:
+   - High risk: auth, payments, migrations, security-adjacent code, or
+     CI/build/workflow config.
+   - Very complex, or you are genuinely unsure the fix is correct.
+   - It would need its own review/decompose/plan cycle or someone else's
+     sign-off to be safe.
+
+   When you do it: run the tests covering the touched code (add a cheap one
+   if none exists — inside the 15-minute budget, not beyond it), and name the
+   extra fix explicitly in your implementation summary (what, why, how it is
+   verified) — a silent extra diff is not an auditable one.
+3. **File it**: high risk, very complex, or more than ~15 minutes of work —
+   file it as its own bead with the evidence you already gathered. This tier
+   is for real work items, not an inbox for 15-minute fixes you did not feel
+   like doing (that is tier 2); but do not silently drop a real discovery
+   either.
 
 ## Shell commands
 
