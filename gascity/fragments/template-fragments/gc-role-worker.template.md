@@ -135,8 +135,10 @@ real user later. Three tiers, in order:
      obviously correct.
    - **Incremental**: small, self-contained diff — no design work, no new
      dependency, no API/schema change.
-   - **≤15 minutes**: including verifying it. If it is still growing at the
-     15-minute mark, stop, revert the extra change, and go to 3.
+   - **≤15 minutes of implementation**: the budget covers writing the fix
+     only — verification time does not count against it (verifying is still
+     mandatory, see below). If the implementation itself is still growing at
+     the 15-minute mark, stop, revert the extra change, and go to 3.
 
    Disqualifiers — any one sends it to tier 3 regardless of how small the
    diff looks:
@@ -147,14 +149,30 @@ real user later. Three tiers, in order:
      sign-off to be safe.
 
    When you do it: run the tests covering the touched code (add a cheap one
-   if none exists — inside the 15-minute budget, not beyond it), and name the
-   extra fix explicitly in your implementation summary (what, why, how it is
-   verified) — a silent extra diff is not an auditable one.
-3. **File it**: high risk, very complex, or more than ~15 minutes of work —
-   file it as its own bead with the evidence you already gathered. This tier
-   is for real work items, not an inbox for 15-minute fixes you did not feel
-   like doing (that is tier 2); but do not silently drop a real discovery
-   either.
+   if none exists — verification sits outside the 15-minute implementation
+   budget, so do it properly), and name the extra fix explicitly in your
+   implementation summary (what, why, how it is verified) — a silent extra
+   diff is not an auditable one.
+
+   **A JFDI'd fix gets NO bead — and kills any bead it satisfies.** Never
+   file-then-fix: the implementation summary is the record. If a bead for
+   the same discovery already exists (filed by an earlier pass, a reviewer,
+   or another worker), close it in the same pass with the fixing commit as
+   the reason — a fixed-but-open bead re-enters dispatch as a phantom work
+   item and wastes a full workflow discovering it is already done.
+3. **File it**: high risk, very complex, or more than ~15 minutes of
+   implementation — file it as its own bead with the evidence you already
+   gathered. This tier is for real work items, not an inbox for 15-minute
+   fixes you did not feel like doing (that is tier 2); but do not silently
+   drop a real discovery either.
+
+These tiers apply to EVERY stage that surfaces discoveries — implementation,
+review, re-review, and fix-planning alike, in whichever pass currently owns
+the branch. A reviewer or fix-planner who spots a tier-2 item folds it into
+the current fix pass (or lists it in the fix plan for the very next apply
+pass) instead of filing a bead; one consolidated pass beats a trail of
+single-fix beads every time. Always bias toward consolidation and
+simplicity: fewer, fuller passes and fewer beads.
 
 ## Shell commands
 
