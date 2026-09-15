@@ -110,6 +110,25 @@ gc runtime drain-ack
 
 Then exit. Never claim "drained" without acknowledgement.
 
+## Secrets and credentials
+
+Never print credential material — not to diagnose, not to verify, not to
+prove absence. Session transcripts are durable and readable by other agents
+and humans; a secret echoed once is leaked permanently.
+
+- Auth-state checks are presence/status-only: `vercel whoami`,
+  `gh auth status`, `test -f ~/.vercel/auth.json && echo present`,
+  a command's own exit code. These answer every "am I logged in?" question.
+- NEVER `cat`/`head`/`less`/`jq` a credential file (`~/.vercel/auth.json`,
+  `.env*`, `*token*`, `*credential*`, keychain exports), never `echo` a
+  secret-bearing variable, and never `env | grep -i <vendor>` — value prints
+  next to name. To check whether a variable exists, use a name-only form:
+  `env | grep -o '^[A-Za-z_]*VERCEL[A-Za-z_]*'` or
+  `[ -n "${VERCEL_TOKEN+x}" ] && echo set`.
+- If a tool reports logged-out and a status-only probe cannot fix it, that
+  is an EXTERNAL BLOCKER: record it in your close reason / report and stop.
+  Reading credential stores is never the next diagnostic step.
+
 ## Scope: discoveries during execution
 
 You will sometimes notice a problem beyond your claimed bead's own scope while
