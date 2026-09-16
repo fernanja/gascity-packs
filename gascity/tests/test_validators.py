@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import os
 import pathlib
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -600,6 +602,138 @@ class BuildArtifactSchemaRootsTests(unittest.TestCase):
                 build_artifact_validator.schema_roots(),
                 [build_artifact_validator.SCHEMA_ROOT],
             )
+
+
+class InstalledLayoutSchemaResolutionTests(unittest.TestCase):
+    """A city installs this script flat (e.g. .gc/scripts/validate_build_artifact.py),
+    detached from the pack source tree entirely. These run the script as a
+    subprocess from a copy in that layout -- import-time SCHEMA_ROOT caching
+    in this process makes an in-process import unable to observe a different
+    __file__ location."""
+
+    VALIDATOR_SOURCE = pathlib.Path(__file__).resolve().parents[1] / "assets" / "scripts" / "validate_build_artifact.py"
+    PACK_SCHEMA_ROOT = pathlib.Path(__file__).resolve().parents[1] / "schemas" / "build"
+
+    ARTIFACT_TEXT = """---
+schema: gc.build.final-report.v1
+workflow:
+  id: build-20260609-002
+  formula: build-basic
+methodology:
+  pack: gascity
+  name: build-basic
+producer:
+  formula: publish
+  stage: finalize
+  attempt: 1
+status: approved
+trace:
+  upstream:
+    - path: review.md
+      hash: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  coverage:
+    - id: GC-METH-001
+      status: covered
+---
+
+## Summary
+
+Summary content.
+
+## Outcome
+
+Outcome content.
+
+## Artifacts
+
+Artifacts content.
+
+## Remaining Risks
+
+Remaining Risks content.
+
+| ID | Status |
+| --- | --- |
+| GC-METH-001 | covered |
+"""
+
+    def _install_flat_copy(self, root: pathlib.Path) -> pathlib.Path:
+        scripts_dir = root / "scripts"
+        scripts_dir.mkdir(parents=True)
+        installed = scripts_dir / "validate_build_artifact.py"
+        installed.write_text(self.VALIDATOR_SOURCE.read_text(encoding="utf-8"), encoding="utf-8")
+        return installed
+
+    def _materialize_schemas(self, installed: pathlib.Path) -> None:
+        schema_dir = installed.parent / "schemas" / "build"
+        schema_dir.mkdir(parents=True)
+        for source in self.PACK_SCHEMA_ROOT.glob("*.yaml"):
+            (schema_dir / source.name).write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+
+    def _run(self, installed: pathlib.Path, artifact: pathlib.Path, env: dict) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, str(installed), "--schema", "gc.build.final-report.v1", "--path", str(artifact)],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+
+    def test_installed_flat_copy_without_materialized_schemas_fails_unknown_schema(self) -> None:
+        # Today's actual broken state (gc-5c20w): the script is installed
+        # flat with no schemas/ alongside it and no GC_BUILD_SCHEMA_ROOTS set.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            installed = self._install_flat_copy(root)
+            artifact = root / "final-report.md"
+            artifact.write_text(self.ARTIFACT_TEXT, encoding="utf-8")
+
+            env = {k: v for k, v in os.environ.items() if k != "GC_BUILD_SCHEMA_ROOTS"}
+            result = self._run(installed, artifact, env)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("unknown build artifact schema", result.stdout + result.stderr)
+
+    def test_installed_flat_copy_with_materialized_schemas_resolves_without_env_override(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            installed = self._install_flat_copy(root)
+            self._materialize_schemas(installed)
+            artifact = root / "final-report.md"
+            artifact.write_text(self.ARTIFACT_TEXT, encoding="utf-8")
+
+            env = {k: v for k, v in os.environ.items() if k != "GC_BUILD_SCHEMA_ROOTS"}
+            result = self._run(installed, artifact, env)
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout)["schema"], "gc.build.final-report.v1")
+
+    def test_installed_flat_copy_extra_root_cannot_shadow_materialized_base_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            installed = self._install_flat_copy(root)
+            self._materialize_schemas(installed)
+
+            shadow_root = root / "extra"
+            shadow_root.mkdir()
+            (shadow_root / "final-report.v1.yaml").write_text(
+                "schema_id: gc.build.final-report.v1\n"
+                "required_front_matter: [schema]\n"
+                "allowed_statuses: [draft]\n"
+                "coverage_statuses: [covered]\n"
+                "required_sections: []\n",
+                encoding="utf-8",
+            )
+            artifact = root / "final-report.md"
+            artifact.write_text(self.ARTIFACT_TEXT, encoding="utf-8")
+
+            env = {k: v for k, v in os.environ.items() if k != "GC_BUILD_SCHEMA_ROOTS"}
+            env["GC_BUILD_SCHEMA_ROOTS"] = str(shadow_root)
+            result = self._run(installed, artifact, env)
+
+            # The shadow root's schema rejects status "approved" (only
+            # "draft" allowed). A pass here proves the materialized base
+            # schema resolved first and was never shadowed.
+            self.assertEqual(result.returncode, 0, result.stderr)
 
 
 if __name__ == "__main__":

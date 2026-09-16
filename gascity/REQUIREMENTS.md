@@ -202,6 +202,13 @@ for formula checks. Base schemas are expected at stable paths:
 | `gc.build.review.v1` | `gascity/schemas/build/review.v1.yaml` |
 | `gc.build.final-report.v1` | `gascity/schemas/build/final-report.v1.yaml` |
 
+`validate_build_artifact.py` also ships flat into a city as
+`.gc/scripts/validate_build_artifact.py`, detached from this source tree. To
+resolve base schemas there without requiring `GC_BUILD_SCHEMA_ROOTS`, an
+install must also materialize the schemas alongside it, at
+`.gc/scripts/schemas/build/`; the validator probes that installed-alongside
+location before falling back to the source-tree path above.
+
 Derived packs may add stricter methodology-specific schemas or extension fields,
 but they must not relax the base schema or replace required base sections,
 fields, statuses, traceability, or coverage.

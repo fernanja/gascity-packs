@@ -17,8 +17,34 @@ except ImportError:  # pragma: no cover
 
 
 FRONT_MATTER_RE = re.compile(r"\A---\n(?P<front>.*?)\n---(?:\n|\Z)(?P<body>.*)\Z", re.DOTALL)
-SCHEMA_ROOT = Path(__file__).resolve().parents[2] / "schemas" / "build"
 FORBIDDEN_REQUIRED_FIELD_NAMES = {"owner", "stage-owner", "stage_owner", "persona", "role"}
+
+
+def _installed_schema_root() -> Path:
+    # A city installs this script flat (e.g. .gc/scripts/validate_build_artifact.py)
+    # with no source-tree ancestors to walk. If the install also materializes
+    # schemas alongside it (.gc/scripts/schemas/build/), this is where they land.
+    return Path(__file__).resolve().parent / "schemas" / "build"
+
+
+def _source_tree_schema_root() -> Path:
+    # Pack source-tree layout: <pack>/assets/scripts/validate_build_artifact.py,
+    # base schemas at <pack>/schemas/build.
+    return Path(__file__).resolve().parents[2] / "schemas" / "build"
+
+
+def _resolve_base_schema_root() -> Path:
+    # Probe the installed-alongside-script location before the source-tree
+    # location, so a flat installed copy resolves without requiring
+    # GC_BUILD_SCHEMA_ROOTS. Falls back to the source-tree path when neither
+    # exists, so error messages still name the canonical location.
+    for candidate in (_installed_schema_root(), _source_tree_schema_root()):
+        if candidate.is_dir():
+            return candidate
+    return _source_tree_schema_root()
+
+
+SCHEMA_ROOT = _resolve_base_schema_root()
 
 
 class ValidationError(Exception):
