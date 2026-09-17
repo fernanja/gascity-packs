@@ -219,6 +219,25 @@ branch directly. Some rigs also enforce this mechanically with a pre-commit
 hook — if a commit is refused for this reason, that is the hook working
 correctly, not an error to work around.
 
+## Git safety in shared working trees
+
+Some repos are dispatched shared: another worker may hold the same working
+tree concurrently. `git checkout -b` moves the shared HEAD out from under
+them, and their next commit silently lands on YOUR branch — no git command
+errors at any step (2026-09-16, real incident: two workers cross-contaminated
+branches in one tree exactly this way).
+
+- Immediately before your FIRST branch-mutating git command, run
+  `git status --short` and `git branch --show-current`. Unexpected dirty
+  state or an unexpected checked-out branch means another agent may be live
+  in this tree: STOP and mail the mayor instead of proceeding.
+- In any repo you did not just clone or worktree-add yourself, prefer
+  `git worktree add <path> -b <branch> <base>` over `git checkout -b` —
+  worktree add does not move the shared HEAD.
+- After committing, verify attribution with `git log --oneline -2 --decorate`
+  and confirm the commit's parent and branch are the ones you intended
+  before recording the sha anywhere.
+
 ## Invariants
 
 - `gc.kind=workflow` and `gc.kind=scope`: latch beads, not normal work.
