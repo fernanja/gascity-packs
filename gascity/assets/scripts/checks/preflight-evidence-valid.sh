@@ -41,7 +41,7 @@ fi
 
 BEAD_ID="${GC_BEAD_ID:-}"
 [ -n "$BEAD_ID" ] || fail "GC_BEAD_ID is required"
-command -v bd >/dev/null 2>&1 || fail "bd is required on PATH"
+command -v gc >/dev/null 2>&1 || fail "gc is required on PATH"
 command -v python3 >/dev/null 2>&1 || fail "python3 is required on PATH"
 command -v make >/dev/null 2>&1 || fail "make is required on PATH"
 
@@ -68,12 +68,12 @@ print(value if isinstance(value, str) else "")
 ' "$2"
 }
 
-SHOW_JSON="$(bd show "$BEAD_ID" --json 2>/dev/null)" || fail "bd show $BEAD_ID failed"
+SHOW_JSON="$(gc bd show "$BEAD_ID" --json 2>/dev/null)" || fail "gc bd show $BEAD_ID failed"
 
 ROOT_ID="$(metadata_value "$SHOW_JSON" "gc.root_bead_id")"
 ROOT_JSON="$SHOW_JSON"
 if [ -n "$ROOT_ID" ] && [ "$ROOT_ID" != "$BEAD_ID" ]; then
-  ROOT_JSON="$(bd show "$ROOT_ID" --json 2>/dev/null)" || fail "bd show $ROOT_ID failed"
+  ROOT_JSON="$(gc bd show "$ROOT_ID" --json 2>/dev/null)" || fail "gc bd show $ROOT_ID failed"
 fi
 [ -n "$ROOT_ID" ] || ROOT_ID="$BEAD_ID"
 

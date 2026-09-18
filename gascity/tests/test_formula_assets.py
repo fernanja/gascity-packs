@@ -221,6 +221,12 @@ MODE_VAR_DEFAULTS = {
 
 BUILD_ARTIFACT_CHECK_SCRIPT = ".gc/scripts/checks/build-artifact-valid.sh"
 
+# Per-gate overrides of (script, timeout) for gates whose formula wires a
+# stricter check than the shared BUILD_ARTIFACT_CHECK_SCRIPT / "5m" default.
+BUILD_ARTIFACT_GATE_CHECK_OVERRIDES = {
+    ("review", "write-report"): (".gc/scripts/checks/preflight-evidence-valid.sh", "20m"),
+}
+
 # One produce attempt plus two bounded schema-repair attempts per artifact stage.
 BUILD_ARTIFACT_GATE_MAX_ATTEMPTS = 3
 
@@ -517,6 +523,7 @@ def resolve_formula(root: pathlib.Path, name: str, seen: tuple[str, ...] = ()) -
         "description": data.get("description", ""),
         "version": data.get("version", 1),
         "contract": data.get("contract", ""),
+        "requires": data.get("requires", {}),
         "target_required": data.get("target_required"),
         "vars": {},
         "steps": [],
@@ -525,6 +532,8 @@ def resolve_formula(root: pathlib.Path, name: str, seen: tuple[str, ...] = ()) -
         parent_data = resolve_formula(root, parent, (*seen, name))
         if not merged["contract"]:
             merged["contract"] = parent_data.get("contract", "")
+        if not merged["requires"]:
+            merged["requires"] = parent_data.get("requires", {})
         if merged["target_required"] is None:
             merged["target_required"] = parent_data.get("target_required")
         merged["vars"].update(parent_data.get("vars", {}))
@@ -739,7 +748,7 @@ class FormulaAssetTests(unittest.TestCase):
             data = tomllib.loads(path.read_text(encoding="utf-8"))
             name = path.name.removesuffix(".formula.toml")
             self.assertEqual(data["formula"], name)
-            self.assertEqual(data["contract"], "graph.v2")
+            self.assertEqual(data["requires"]["formula_compiler"], ">=2.0.0")
             var_names = set(data.get("vars", {}))
             self.assertNotIn("issue", var_names)
             self.assertNotIn("bead_id", var_names)
@@ -1347,7 +1356,7 @@ class FormulaAssetTests(unittest.TestCase):
             with self.subTest(formula=name):
                 data = load_formula(root, name)
                 self.assertEqual(data["formula"], name)
-                self.assertEqual(data["contract"], "graph.v2")
+                self.assertEqual(data["requires"]["formula_compiler"], ">=2.0.0")
                 self.assertTrue(data["internal"])
                 self.assertNotIn("catalog", data)
                 self.assertNotIn("extends", data)
@@ -1970,7 +1979,7 @@ class FormulaAssetTests(unittest.TestCase):
         root = pathlib.Path(__file__).resolve().parents[1]
         review = load_formula(root, "build-basic-review")
         self.assertEqual(review["type"], "expansion")
-        self.assertEqual(review["contract"], "graph.v2")
+        self.assertEqual(review["requires"]["formula_compiler"], ">=2.0.0")
         self.assertEqual(
             review["vars"]["implementation_target"]["default"],
             "gc.implementation-worker",
@@ -1984,6 +1993,7 @@ class FormulaAssetTests(unittest.TestCase):
                 "{target}.acceptance-review",
                 "{target}.test-evidence-review",
                 "{target}.simplicity-review",
+                "{target}.preflight-review",
                 "{target}.synthesize-review",
                 "{target}.apply-review-findings",
             ],
@@ -3731,7 +3741,7 @@ class FormulaAssetTests(unittest.TestCase):
             "close only `<source-anchor-id>`",
             "handle both an object and a",
             "`gc.work_dir` is the launcher rig",
-            "points at a worktree without the",
+            "does not contain the recorded implementation commit",
             "gc bd show <source-anchor-id> --json",
             "status=closed",
             "gc.outcome=pass",
@@ -3837,7 +3847,7 @@ class FormulaAssetTests(unittest.TestCase):
         for name, (url_var, optional_vars) in expected.items():
             with self.subTest(name=name):
                 data = resolve_formula(root, name)
-                self.assertEqual(data["contract"], "graph.v2")
+                self.assertEqual(data["requires"]["formula_compiler"], ">=2.0.0")
                 self.assertFalse(data["target_required"])
                 self.assertTrue(data["vars"][url_var]["required"])
                 self.assertEqual(set(data["vars"]) - {url_var}, optional_vars)
@@ -4237,6 +4247,7 @@ description = "Override sink that writes the base triage report contract."
                 "design-review-approved.sh",
                 "gap-analysis-approved.sh",
                 "implementation-review-approved.sh",
+                "preflight-evidence-valid.sh",
             ],
         )
         for script in scripts:
@@ -4266,12 +4277,16 @@ description = "Override sink that writes the base triage report contract."
                     BUILD_ARTIFACT_GATE_MAX_ATTEMPTS,
                     f"{formula_name}.{step_id} must keep one produce plus two bounded repair attempts",
                 )
+                check_script, check_timeout = BUILD_ARTIFACT_GATE_CHECK_OVERRIDES.get(
+                    (formula_name, step_id),
+                    (BUILD_ARTIFACT_CHECK_SCRIPT, "5m"),
+                )
                 self.assertEqual(
                     step["check"]["check"],
                     {
                         "mode": "exec",
-                        "path": BUILD_ARTIFACT_CHECK_SCRIPT,
-                        "timeout": "5m",
+                        "path": check_script,
+                        "timeout": check_timeout,
                     },
                 )
                 self.assertEqual(step["metadata"]["gc.build.artifact_schema"], schema)
@@ -4421,6 +4436,17 @@ description = "Override sink that writes the base triage report contract."
       "gc.ralph_step_id": "review.build-basic-review-loop",
       "gc.scope_ref": "review.build-basic-review-loop.iteration.1",
       "code_review.simplicity_verdict": "approve"
+    }
+  },
+  {
+    "id": "preflight",
+    "updated_at": "2026-06-15T01:00:03Z",
+    "metadata": {
+      "gc.root_bead_id": "root",
+      "gc.attempt": "1",
+      "gc.ralph_step_id": "review.build-basic-review-loop",
+      "gc.scope_ref": "review.build-basic-review-loop.iteration.1",
+      "code_review.preflight_verdict": "approve"
     }
   }
 ]"""
