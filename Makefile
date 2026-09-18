@@ -1,5 +1,11 @@
 GC ?= gc
-PYTHON ?= python3
+ifeq ($(origin PYTHON),undefined)
+ifneq ("$(wildcard .venv312/bin/python)","")
+PYTHON := .venv312/bin/python
+else
+PYTHON := python3
+endif
+endif
 REGISTRY ?= registry.toml
 REGISTRY_REF ?= main
 REGISTRY_COMMIT ?= HEAD
