@@ -1,5 +1,11 @@
 GC ?= gc
-PYTHON ?= python3
+ifeq ($(origin PYTHON),undefined)
+ifneq ("$(wildcard .venv312/bin/python)","")
+PYTHON := .venv312/bin/python
+else
+PYTHON := python3
+endif
+endif
 REGISTRY ?= registry.toml
 REGISTRY_REF ?= main
 REGISTRY_COMMIT ?= HEAD
@@ -14,7 +20,7 @@ ifneq ($(strip $(PACK_DESCRIPTION)),)
 STAMP_PACK_DESCRIPTION := --pack-description "$(PACK_DESCRIPTION)"
 endif
 
-.PHONY: registry-help registry-format-validate registry-validate registry-validate-all registry-publish registry-withdraw
+.PHONY: registry-help registry-format-validate registry-validate registry-validate-all registry-publish registry-withdraw preflight
 
 registry-help:
 	@printf '%s\n' 'Registry targets:'
@@ -60,3 +66,9 @@ registry-withdraw:
 		--pack "$(PACK)" \
 		--version "$(VERSION)" \
 		--reason "$(REASON)"
+
+preflight:
+	$(PYTHON) validate_registry.py --require-git
+	$(PYTHON) -m pytest tests contributing/tests gascity/tests discord/tests \
+	  github/tests oversight-rig/tests slack-full/tests slack-channel/tests \
+	  pr-pipeline/tests profiler/tests -q

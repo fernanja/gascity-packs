@@ -80,7 +80,7 @@ class RoleTests(unittest.TestCase):
     def test_shared_fragment_is_reachable_through_the_gascity_import(self) -> None:
         # The fragment ships in gascity only; without [imports.gc] the template
         # reference above cannot resolve.
-        fragment = REPO_ROOT / "gascity" / "template-fragments" / "gc-role-worker.template.md"
+        fragment = REPO_ROOT / "gascity" / "fragments" / "template-fragments" / "gc-role-worker.template.md"
         self.assertIn('{{ define "gc-role-worker"',
                       fragment.read_text(encoding="utf-8"))
 
