@@ -1,9 +1,32 @@
 
 Resolve `<source-anchor-id>` using the same rules as `prepare-worktree`. Read `work_dir` from the source anchor and verify the implementation commit and
-summary evidence are present in that worktree. Write per-item summary to
-{{summary_path}} when set. If `summary_path` is not set, first use
-`gc.implementation.summary_path` from the preceding implementation step when it
-is present; otherwise use `{{artifact_root}}/task-<source-anchor-id>-summary.md`.
+summary evidence are present in that worktree.
+
+Before closing the source anchor, copy any implementation evidence out of the
+worktree to a durable location, since the worktree reaper can remove
+`work_dir` as soon as the source anchor closes:
+
+- Resolve the current evidence path: `gc.implementation.summary_path`
+  (fallback `gc.build.implementation_summary_path`) on the workflow root,
+  when present; otherwise there is no prior evidence file yet.
+- Resolve the durable destination: `{{summary_path}}` only when the caller
+  set it AND that path does not resolve inside `work_dir` (the source
+  anchor's worktree); otherwise
+  `{{artifact_root}}/task-<source-anchor-id>-summary.md`. The destination
+  must never be inside any worktree.
+- If the current evidence path is a descendant of `work_dir`: copy it
+  byte-for-byte to the destination (create parent dirs under
+  `{{artifact_root}}`), verify the copy exists and matches the source size,
+  then update the WORKFLOW ROOT (resolve via `gc.root_bead_id` on this step
+  bead):
+  `gc bd update <root-bead-id> --set-metadata "gc.implementation.summary_path=<destination>"`,
+  and repoint `gc.build.implementation_summary_path` too if it also pointed
+  at the worktree-local path.
+- If the current evidence path is already outside any worktree: record it
+  as-is (unchanged behavior).
+- If no current evidence path was resolved: write a fresh minimal summary
+  directly at the (durable) destination (unchanged fallback, now explicit
+  that the destination is always durable).
 
 When reading beads with `gc bd show --json`, handle both an object and a
 one-element list before reading metadata. `gc.work_dir` is the launcher rig
