@@ -3742,6 +3742,7 @@ class FormulaAssetTests(unittest.TestCase):
             "handle both an object and a",
             "`gc.work_dir` is the launcher rig",
             "does not contain the recorded implementation commit",
+            "the city's managed worktree root, not just the",
             "gc bd show <source-anchor-id> --json",
             "status=closed",
             "gc.outcome=pass",
@@ -3751,6 +3752,47 @@ class FormulaAssetTests(unittest.TestCase):
         ):
             with self.subTest(step="close-source-anchor", fragment=fragment):
                 self.assertIn(fragment, close_source)
+
+    def test_close_source_anchor_preserves_evidence_before_reap(self) -> None:
+        """Regression coverage for the four durability invariants required
+        when preserving implementation evidence before the worktree reaper
+        can remove `work_dir` (gcas-bnygo8)."""
+        root = pathlib.Path(__file__).resolve().parents[1]
+        do_work = tomllib.loads((root / "formulas" / "do-work.formula.toml").read_text(encoding="utf-8"))
+        steps = {step["id"]: step for step in do_work["steps"]}
+        close_source = node_description(root, steps["close-source-anchor"])
+
+        # (a) copy happens before the source anchor closes.
+        copy_pos = close_source.index("Before closing the source anchor, copy any implementation evidence")
+        close_pos = close_source.index("On success, close only `<source-anchor-id>`")
+        self.assertLess(copy_pos, close_pos)
+
+        # (b) the destination is validated as durable — outside every
+        # city-managed worktree, not only the current source anchor's
+        # `work_dir` — and the check applies to both the `{{summary_path}}`
+        # candidate and the `{{artifact_root}}` fallback.
+        for fragment in (
+            "Canonicalize the resolved candidate",
+            "$GC_CITY/.gc/worktrees/",
+            "Apply this same check to the",
+            "{{artifact_root}}` fallback itself",
+            "fail this step with a configuration error",
+        ):
+            with self.subTest(invariant="durable-destination", fragment=fragment):
+                self.assertIn(fragment, close_source)
+
+        # (c) the primary metadata key is always repointed after a copy.
+        self.assertIn(
+            'gc bd update <root-bead-id> --set-metadata "gc.implementation.summary_path=<destination>"',
+            close_source,
+        )
+
+        # (d) the secondary key is repointed only when it also pointed at
+        # the worktree-local path.
+        self.assertIn(
+            "repoint `gc.build.implementation_summary_path` too if it also pointed\n  at the worktree-local path",
+            close_source,
+        )
 
     def test_wrapper_formulas_route_role_agents(self) -> None:
         root = pathlib.Path(__file__).resolve().parents[1]
