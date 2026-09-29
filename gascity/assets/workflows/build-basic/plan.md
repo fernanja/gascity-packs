@@ -45,6 +45,14 @@ Include the required schema sections:
 - Non-Goals
 - Verification
 
+Trace consumer call paths. When the requirements or design source name a
+component or API that a page or other consumer will use (especially one an
+earlier or sibling part delivered), record the exact call path (design
+reference -> page/consumer -> wrapper -> primitive) and plan at least one test
+at the consumer-facing layer, not only on the primitive. When this build is one
+part of a multi-part effort, list each dependency on an earlier part's
+deliverable with its concrete call path.
+
 Record the implementation plan path on the workflow root bead before closing.
 Use `gc bd update "<workflow-root-id>" --set-metadata "gc.build.plan_path=<absolute path>"`.
 Do not use `gc bd update --metadata 'key=value'`; `--metadata` only accepts a JSON

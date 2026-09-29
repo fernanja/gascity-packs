@@ -50,6 +50,28 @@ non-`approved` repair_status, re-open the artifact at the review report path
 you are about to cite and confirm its own status/verdict field actually
 supports that outcome.
 
+Each repair pass that commits a fix runs the implementation self-check before
+re-review and records it in the repair artifact. It fails closed: the checks
+the plan lists were run (command and exit code); every cited commit sha passes
+`git merge-base --is-ancestor <sha> HEAD`; summary metadata matches its own
+text; regenerated baselines/snapshots were opened and show the intended
+change; required gates (e.g. preflight) were run with exit codes recorded.
+
+Wording-only findings touch only prose (docs, reply drafts, reports, code
+comments) and change no code or test behaviour. Fix them in the same repair
+pass as the code findings. When the most recent re-review's only remaining
+findings are wording-only, fix them here instead of starting another full
+review loop: re-read each result against its finding, and confirm
+`git diff <reviewed-sha> HEAD` (the commit that re-review examined) changes
+only prose. Then write a `gc.build.review.v1` wording-fix validation artifact
+with `status: approved` that lists each finding and its fix and states that
+the diff since `<reviewed-sha>` is wording-only. It counts as the most recent
+re-review artifact for the rule above: record it as
+`gc.build.review_report_path`, with `gc.build.review_verdict=approved` and the
+fresh `git rev-parse HEAD` as `gc.build.review_subject_commit`, so publish
+pushes the final HEAD. A diff that changes code or test behaviour always gets
+a real re-review; this rule never skips one.
+
 Record every attempt on the workflow root metadata and in artifacts. Every
 time you write `gc.build.repair_status`, also refresh `gc.build.review_verdict`,
 `gc.build.review_report_path`, and `gc.build.review_subject_commit` on the

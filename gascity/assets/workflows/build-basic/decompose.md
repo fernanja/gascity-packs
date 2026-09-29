@@ -49,6 +49,12 @@ Include the required schema sections:
 - Implementation Convoy
 - Work Items
 
+Carry plan-review must-address notes forward: copy each note under
+`## Must-Address Notes` in the plan-review artifact (workflow root
+`gc.build.plan_review_report_path`, when recorded) into the description of the
+work item that owns it as an unchecked checklist item (`- [ ] ...`), so the
+implementer sees it. Record a note with no owning item as blocked work.
+
 Create work-item beads first, then create a new implementation convoy for those
 work units. Do not reuse the source or launch convoy from `gc.var.convoy_id`.
 

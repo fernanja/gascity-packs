@@ -59,6 +59,24 @@ a preflight failure alone, and do not withhold `gc.outcome=pass` because of
 one. A failing preflight is downstream review's finding to raise and repair-
 review's loop to fix, not a second retry mechanism nested inside this step.
 
+Before closing, run this self-check and record it under `### Self-Check`
+inside `## Verification`. It fails closed: if any item does not hold, fix it
+and re-check before closing. It must never be left for review to find.
+
+- Every check/test the plan or work item lists exists and was run; list each
+  with its command and exit code.
+- Every commit sha cited in the summary, a report, or a reply draft passes
+  `git merge-base --is-ancestor <sha> HEAD`; re-cite after any rebase.
+- Summary metadata (coverage numbers, file counts, verdicts) matches the
+  summary's own text.
+- Regenerated visual baselines/snapshots were opened and checked: not a
+  loading skeleton, not blank, and showing the intended change. Record what
+  you checked.
+- Every required gate the plan names (e.g. the repo's preflight) was run, with
+  its exit code recorded. The run is required; a failing preflight result is
+  still handled as described above.
+- Every must-address checklist item on the work item is done.
+
 Write the summary as a `gc.build.implementation-summary.v1` artifact and record
 its absolute path on the workflow root bead as `gc.implementation.summary_path`
 before closing. Write this artifact inside `$WORKTREE`, never the launcher

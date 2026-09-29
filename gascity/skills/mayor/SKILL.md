@@ -69,6 +69,11 @@ Each user story should include lightweight acceptance criteria, usually 2-5
 bullets. Capture constraints discovered from the repo. Do not preselect bead
 IDs or formula targets in requirements.
 
+When requirements forbid edits to a shared area (e.g. "no edits under
+`packages/ui`"), do not write a flat ban. Add a sanctioned exception: a minimal
+fix to wiring an earlier part delivered is allowed when an acceptance
+criterion needs it, and the implementation summary must name it.
+
 ## Implementation Plan
 
 Use an implementation plan after requirements are approved, or when the user

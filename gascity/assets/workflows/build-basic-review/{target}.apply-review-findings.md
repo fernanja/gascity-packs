@@ -9,6 +9,22 @@ the fix is whatever `make preflight`/`make preflight-fast` reported failing —
 fix the code, then re-run it yourself in the worktree before writing the
 summary; do not just describe the failure back.
 
+Before writing the review-fix summary, run the implementation self-check and
+record it there. It fails closed: the checks the plan lists were run (command
+and exit code); every cited commit sha passes
+`git merge-base --is-ancestor <sha> HEAD`; summary metadata matches its own
+text; regenerated baselines/snapshots were opened and show the intended
+change; required gates (e.g. preflight) were run with exit codes recorded.
+
+Wording-only findings touch only prose (docs, reply drafts, reports, code
+comments) and change no code or test behaviour. Fix them in the same pass as
+the code findings. When the synthesis's only remaining findings are
+wording-only, fix them, re-read each result against its finding, confirm this
+pass's diff changes only prose, record that validation in the review-fix
+summary, and set `code_review.verdict=done` instead of starting another review
+loop. A pass that changes code or test behaviour always sets `iterate` so the
+lanes re-review it; this rule never skips that.
+
 Apply fixes to the implementation source anchor/worktree named in the review
 context, not to the launcher rig root. An unchanged root checkout is not itself
 a required fix for build-basic; publish owns propagation beyond the source
@@ -32,8 +48,9 @@ is explicit.
 Contract: `gc.work_dir` is the launcher rig root, not the implementation worktree.
 
 Set `code_review.verdict=done` only when acceptance, test evidence,
-simplicity, and preflight all approve after this pass. Set
-`code_review.verdict=iterate` when required fixes remain.
+simplicity, and preflight all approve after this pass, or under the
+wording-only rule above. Set `code_review.verdict=iterate` when required fixes
+remain.
 
 Always close with `gc.outcome=pass`,
 `code_review.verdict=done|iterate`,

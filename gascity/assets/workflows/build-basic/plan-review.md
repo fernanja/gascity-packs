@@ -10,6 +10,18 @@ Include a lightweight implementation readiness pass before decomposition:
 - risk: risky files, migrations, public interfaces, and rollback concerns are
   explicit enough for an implementer
 
+Check scope reachability: confirm every acceptance criterion can be met along
+the plan's traced call path without breaking the requirements' scope
+constraints (e.g. "no edits under X"). If a scope ban makes a criterion
+unreachable, record a blocking finding naming the criterion, the ban, and the
+call-path hop that needs the edit. Never approve around the conflict.
+
+Mark every specific, actionable note (e.g. "measure first", "X is the page's
+responsibility") as `advisory` or `must-address`, and list the must-address
+notes under `## Must-Address Notes` in the plan-review artifact
+(the plan-readiness note below; write it whenever such notes exist).
+Decomposition copies each one into its owning work item as a checklist item.
+
 If you write a plan-readiness note, record it on the workflow root as
 `gc.build.plan_review_report_path=<path>`. Do not write or overwrite
 `gc.build.review_report_path`; that key is reserved for the later

@@ -633,6 +633,39 @@ def node_description(root: pathlib.Path, node: dict) -> str:
     return node["description"]
 
 
+def rendered_step_text(root: pathlib.Path, formula: str, step_id: str) -> str:
+    """Prose a step actually renders after extends/override resolution.
+
+    Unlike effective_formula_text, overridden parent prose is excluded, so a
+    fragment found here is one the worker really sees.
+    """
+    steps = {step["id"]: step for step in resolve_formula(root, formula)["steps"]}
+    return node_description(root, steps[step_id])
+
+
+def drained_formula_text(root: pathlib.Path, formula: str, step_id: str) -> str:
+    """Rendered prose of the formula a drain step dispatches per work item."""
+    steps = {step["id"]: step for step in resolve_formula(root, formula)["steps"]}
+    drained = resolve_formula(root, steps[step_id]["drain"]["formula"])
+    return "\n".join(node_description(root, step) for step in drained["steps"])
+
+
+def expansion_node_text(root: pathlib.Path, formula: str, step_id: str, suffix: str) -> str:
+    """Rendered prose of one node in the expansion a step expands into."""
+    steps = {step["id"]: step for step in resolve_formula(root, formula)["steps"]}
+    for node in formula_nodes(load_formula(root, steps[step_id]["expand"])):
+        if node["id"].endswith(suffix):
+            return node_description(root, node)
+    raise AssertionError(f"{formula}.{step_id} expansion has no node ending {suffix!r}")
+
+
+def repair_step_text(root: pathlib.Path, formula: str) -> str:
+    """Prose of the step that applies review findings for a build-* formula."""
+    if formula == "build-basic":
+        return expansion_node_text(root, formula, "review", ".apply-review-findings")
+    return rendered_step_text(root, formula, "repair-review")
+
+
 def route_target_default(target: str, vars: dict) -> str:
     if target.startswith("{{") and target.endswith("}}"):
         var_name = target.removeprefix("{{").removesuffix("}}").strip()
@@ -1960,6 +1993,124 @@ class FormulaAssetTests(unittest.TestCase):
                     text,
                 )
                 self.assertIn("belong exclusively to the publish", text)
+
+    # gc-50j4j (R13 retro): build-from-plan and build-basic have no shared
+    # plan/plan-review/decompose/repair file (each overrides its own), so the
+    # same prose lives in each rendered copy; implementation prose is shared
+    # through the do-work / do-work-item drain formulas.
+    R13_BUILD_FORMULAS = ("build-from-plan", "build-basic", "build-from-decompose")
+
+    def test_plan_traces_consumer_call_paths(self) -> None:
+        # R13 Part 1 added FilterBar `wrap` and tested FilterBar alone; the
+        # Reports page reached it through ListTemplate.Filters, which never
+        # forwarded `wrap`. The plan must trace the consumer call path and
+        # test at the consumer-facing layer.
+        root = pathlib.Path(__file__).resolve().parents[1]
+        for formula in ("build-from-plan", "build-basic", "build-from-requirements"):
+            text = rendered_step_text(root, formula, "plan")
+            for fragment in (
+                "Trace consumer call paths",
+                "reference -> page/consumer -> wrapper -> primitive",
+                "at the consumer-facing layer, not only on the primitive",
+                "list each dependency on an earlier part's\ndeliverable with its concrete call path",
+            ):
+                with self.subTest(formula=formula, fragment=fragment):
+                    self.assertIn(fragment, text)
+
+    def test_plan_review_blocks_scope_conflicts_and_carries_notes(self) -> None:
+        # R13 Part 2 banned packages/ui edits, making an AC unreachable;
+        # plan-review approved and review found it hours later. Accurate
+        # plan-review notes were ignored because nothing carried them forward.
+        root = pathlib.Path(__file__).resolve().parents[1]
+        for formula in ("build-from-plan", "build-basic", "build-from-requirements"):
+            text = rendered_step_text(root, formula, "plan-review")
+            for fragment in (
+                "Check scope reachability",
+                "If a scope ban makes a criterion\nunreachable, record a blocking finding",
+                "Never approve around the conflict.",
+                "`advisory` or `must-address`",
+                "`## Must-Address Notes`",
+            ):
+                with self.subTest(formula=formula, step="plan-review", fragment=fragment):
+                    self.assertIn(fragment, text)
+        for formula in self.R13_BUILD_FORMULAS:
+            text = rendered_step_text(root, formula, "decompose")
+            for fragment in (
+                "Carry plan-review must-address notes forward",
+                "`## Must-Address Notes`",
+                "unchecked checklist",
+            ):
+                with self.subTest(formula=formula, step="decompose", fragment=fragment):
+                    self.assertIn(fragment, text)
+        mayor = (root / "skills" / "mayor" / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("do not write a flat ban", mayor)
+        self.assertIn("sanctioned exception", mayor)
+
+    def test_implementation_and_repair_run_self_check_before_review(self) -> None:
+        # R13: 11 of 15 repair loops were implementation errors a self-check
+        # catches (unreachable cited SHAs, metadata/text mismatches, skeleton
+        # baselines, unrun gates). The check fails closed in the step itself.
+        root = pathlib.Path(__file__).resolve().parents[1]
+        for formula in self.R13_BUILD_FORMULAS:
+            for step in ("implement", "implement-same-session"):
+                text = drained_formula_text(root, formula, step)
+                for fragment in (
+                    "`### Self-Check`",
+                    "It fails closed",
+                    "It must never be left for review to find.",
+                    "`git merge-base --is-ancestor <sha> HEAD`; re-cite after any rebase",
+                    "Summary metadata (coverage numbers, file counts, verdicts) matches",
+                    "Regenerated visual baselines/snapshots were opened and checked",
+                    "Every required gate the plan names",
+                    "must-address checklist item",
+                ):
+                    with self.subTest(formula=formula, step=step, fragment=fragment):
+                        self.assertIn(fragment, text)
+            text = repair_step_text(root, formula)
+            for fragment in (
+                "implementation self-check",
+                "It fails closed",
+                "`git merge-base --is-ancestor <sha> HEAD`",
+                "regenerated baselines/snapshots were opened and show the intended",
+                "required gates (e.g. preflight) were run with exit codes recorded",
+            ):
+                with self.subTest(formula=formula, step="repair", fragment=fragment):
+                    self.assertIn(fragment, text)
+
+    def test_wording_only_findings_fixed_inside_current_loop(self) -> None:
+        # reports-test-hardening: 3 of 6 fix loops only reworded a doc; R13
+        # Part 2 stale reply drafts took extra rounds. Prose-only findings are
+        # fixed and self-validated in the repair pass, never at the cost of
+        # skipping a real re-review for code/test changes.
+        root = pathlib.Path(__file__).resolve().parents[1]
+        for formula in self.R13_BUILD_FORMULAS:
+            text = repair_step_text(root, formula)
+            for fragment in (
+                "Wording-only findings touch only prose",
+                "change no code or test behaviour",
+                "Fix them in the same",
+                "instead of starting another",
+                "re-read each result against its finding",
+                "this rule never skips",
+            ):
+                with self.subTest(formula=formula, fragment=fragment):
+                    self.assertIn(fragment, text)
+        # build-from-review-base: the in-loop wording commit must still end
+        # up as the approved, pushed commit (gc-ajt3i) and be read as the
+        # latest review verdict (gc-jxl5x).
+        for formula in ("build-from-plan", "build-from-decompose"):
+            text = repair_step_text(root, formula)
+            for fragment in (
+                "wording-fix validation artifact\nwith `status: approved`",
+                "is wording-only. It counts as the most recent\nre-review artifact",
+                "`gc.build.review_subject_commit`, so publish\npushes the final HEAD",
+                "A diff that changes code or test behaviour always gets\na real re-review",
+            ):
+                with self.subTest(formula=formula, fragment=fragment):
+                    self.assertIn(fragment, text)
+        basic = repair_step_text(root, "build-basic")
+        self.assertIn("or under the\nwording-only rule above", basic)
+        self.assertIn("always sets `iterate`", basic)
 
     def test_preflight_review_instruction_stays_synchronized(self) -> None:
         # build-base and build-from-review-base are separate root formulas

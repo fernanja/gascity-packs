@@ -5,6 +5,14 @@ Produce or reuse the implementation plan using approved requirements from
 otherwise write the default implementation-plan artifact under
 `{{artifact_root}}`.
 
+Trace consumer call paths. When the requirements or design source name a
+component or API that a page or other consumer will use (especially one an
+earlier or sibling part delivered), record the exact call path (design
+reference -> page/consumer -> wrapper -> primitive) and plan at least one test
+at the consumer-facing layer, not only on the primitive. When this build is one
+part of a multi-part effort, list each dependency on an earlier part's
+deliverable with its concrete call path.
+
 The plan must preserve requirement traceability, upstream hashes, assumptions,
 risks, out-of-scope work, and verification strategy. Before closing this step,
 resolve the workflow root bead id from `gc.root_bead_id` on this step bead, then
