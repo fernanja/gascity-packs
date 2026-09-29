@@ -25,6 +25,13 @@ summary, and set `code_review.verdict=done` instead of starting another review
 loop. A pass that changes code or test behaviour always sets `iterate` so the
 lanes re-review it; this rule never skips that.
 
+A fix for an intermittent or timing failure needs the pre-fix code failing
+and the post-fix code passing under the same reproduction method. If a finding
+is marked `cannot_reproduce`, or you cannot make the pre-fix code fail, do not
+guess-fix: record `blocked` and the evidence in the review-fix summary, then
+close with `gc.outcome=fail`, `gc.failure_class=hard` (terminal; it stops the
+loop) and `gc.failure_reason=cannot_reproduce`. The mayor owns the next step.
+
 Apply fixes to the implementation source anchor/worktree named in the review
 context, not to the launcher rig root. An unchanged root checkout is not itself
 a required fix for build-basic; publish owns propagation beyond the source
@@ -52,7 +59,8 @@ simplicity, and preflight all approve after this pass, or under the
 wording-only rule above. Set `code_review.verdict=iterate` when required fixes
 remain.
 
-Always close with `gc.outcome=pass`,
+Except for the `cannot_reproduce` stop above, always close with
+`gc.outcome=pass`,
 `code_review.verdict=done|iterate`,
 `code_review.report_path=<starter review summary path>`, and
 `code_review.output_path=<starter review summary path>`.

@@ -30,6 +30,15 @@ attention-dependent, not guaranteed (one re-review caught a missing run, an
 identical re-review of a different item did not). A failing run is a required
 fix (`changes_required`), not missing evidence.
 
+Verify load-bearing facts before any wording concern: the SHAs, what actually
+failed, and the failing code's content at the failure SHA. Accept a fix for an
+intermittent or timing failure only with evidence that the pre-fix code fails
+and the post-fix code passes under the same reproduction method (throttling,
+repeats, a stress harness; the repo's AGENTS.md names it). If the pre-fix code
+cannot be made to fail, the verdict is `blocked` with reason `cannot_reproduce`
+and the evidence gathered recorded: never `approved`, never a skip. Never
+demand evidence the repo cannot produce.
+
 For `review_mode=report`, write findings and verdicts without mutating code.
 For `review_mode=agent`, write a structured fix handoff for the caller or
 selected fix loop. For `review_mode=interactive`, safe fixes may be negotiated

@@ -16,6 +16,14 @@ worktree, write an iterate finding against review setup.
 
 Contract: `gc.work_dir` is the launcher rig root, not the implementation worktree.
 
+Accept a fix for an intermittent or timing failure only with evidence that
+the pre-fix code fails and the post-fix code passes under the same
+reproduction method (throttling, repeats, a stress harness; the repo's
+AGENTS.md names it). If the pre-fix code cannot be made to fail, set `iterate`
+with a finding marked `cannot_reproduce` and the evidence gathered; the fix
+lane then stops instead of guess-fixing. Never demand evidence the repo cannot
+produce.
+
 Write concrete findings under the build artifact root. Distinguish missing
 proof from real product defects so the fix lane can either run the missing
 command or change code.

@@ -72,6 +72,13 @@ fresh `git rev-parse HEAD` as `gc.build.review_subject_commit`, so publish
 pushes the final HEAD. A diff that changes code or test behaviour always gets
 a real re-review; this rule never skips one.
 
+A repair for an intermittent or timing failure must show the pre-fix code
+failing and the post-fix code passing under the same reproduction method. When
+the review is `blocked` for `cannot_reproduce`, or a repair pass cannot make
+the pre-fix code fail, do not guess-fix: record the evidence gathered in the
+repair artifact and the blocked outcome below (a reproduction method is the
+missing prerequisite), with `gc.restart.reason=cannot_reproduce`.
+
 Record every attempt on the workflow root metadata and in artifacts. Every
 time you write `gc.build.repair_status`, also refresh `gc.build.review_verdict`,
 `gc.build.review_report_path`, and `gc.build.review_subject_commit` on the

@@ -16,6 +16,10 @@ file.
 
 Contract: `gc.work_dir` is the launcher rig root, not the implementation worktree.
 
+Verify load-bearing facts before any wording concern: the SHAs, what actually
+failed, and the failing code's content at the failure SHA. Correct or drop a
+finding whose facts are wrong before carrying it forward.
+
 Write one starter review synthesis under the build artifact root. The synthesis
 must be short enough for a first-time factory user to scan, but concrete enough
 for the fix lane to act without another planning pass.

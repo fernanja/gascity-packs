@@ -55,6 +55,13 @@ Carry plan-review must-address notes forward: copy each note under
 work item that owns it as an unchecked checklist item (`- [ ] ...`), so the
 implementer sees it. Record a note with no owning item as blocked work.
 
+Stale bundled items are blocking. Re-check each bundled bead, bug report, or
+cited `file:line`: `gc bd show <id>`, and the cited lines on the current base
+branch. One closed with a fixing commit, or whose cited code changed since the
+failure was recorded, is a blocking finding, never a non-blocking note: drop
+it citing that evidence, or set `status: blocked` and stop for a decision.
+Never relabel an earlier fix "partial" without evidence that it failed.
+
 Create work-item beads first, then create a new implementation convoy for those
 work units. Do not reuse the source or launch convoy from `gc.var.convoy_id`.
 

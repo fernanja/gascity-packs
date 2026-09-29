@@ -21,6 +21,13 @@ name the real verification instead (another environment or tool, a headed
 run, or a documented manual check with evidence). Never fall back silently to
 modelling, and never skip verification.
 
+Stale bundled items are blocking. Re-check each bundled bead, bug report, or
+cited `file:line`: `gc bd show <id>`, and the cited lines on the current base
+branch. One closed with a fixing commit, or whose cited code changed since the
+failure was recorded, is a blocking finding, never a non-blocking note: drop
+it citing that evidence, or set `status: blocked` and stop for a decision.
+Never relabel an earlier fix "partial" without evidence that it failed.
+
 The plan must preserve requirement traceability, upstream hashes, assumptions,
 risks, out-of-scope work, and verification strategy. Before closing this step,
 resolve the workflow root bead id from `gc.root_bead_id` on this step bead, then

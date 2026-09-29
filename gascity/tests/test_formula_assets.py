@@ -2138,6 +2138,95 @@ class FormulaAssetTests(unittest.TestCase):
         self.assertIn("or under the\nwording-only rule above", basic)
         self.assertIn("always sets `iterate`", basic)
 
+    # gc-o2ocz (flake retro, gcas-9bowgu): a follow-up bundled a bead fixed
+    # 5h earlier; the decomposer noted it as a non-blocking ambiguity and six
+    # fix loops chased a flake nobody could reproduce. Fragments are matched
+    # on whitespace-flattened prose so re-wrapping a line does not fail them.
+    @staticmethod
+    def _flat(text: str) -> str:
+        return " ".join(text.split())
+
+    def test_requirements_recheck_bundled_sources(self) -> None:
+        root = pathlib.Path(__file__).resolve().parents[1]
+        for formula in ("build-basic", "build-from-requirements"):
+            text = self._flat(rendered_step_text(root, formula, "requirements"))
+            for fragment in (
+                "Re-check bundled sources first.",
+                "run `gc bd show <id>` (status, close reason)",
+                "read the cited lines on the current base branch",
+                "is not a live requirement: drop it citing that evidence",
+            ):
+                with self.subTest(formula=formula, fragment=fragment):
+                    self.assertIn(fragment, text)
+
+    def test_stale_bundled_items_block_plan_and_decompose(self) -> None:
+        root = pathlib.Path(__file__).resolve().parents[1]
+        fragments = (
+            "Stale bundled items are blocking.",
+            "`gc bd show <id>`, and the cited lines on the current base branch",
+            "is a blocking finding, never a non-blocking note",
+            "drop it citing that evidence, or set `status: blocked` and stop for a decision",
+            'Never relabel an earlier fix "partial" without evidence that it failed.',
+        )
+        cases = [(f, "plan") for f in ("build-from-plan", "build-basic", "build-from-requirements")]
+        cases += [(f, "decompose") for f in (*self.R13_BUILD_FORMULAS, "build-from-requirements")]
+        for formula, step in cases:
+            text = self._flat(rendered_step_text(root, formula, step))
+            for fragment in fragments:
+                with self.subTest(formula=formula, step=step, fragment=fragment):
+                    self.assertIn(fragment, text)
+
+    def test_timing_fixes_need_reproduction_evidence(self) -> None:
+        root = pathlib.Path(__file__).resolve().parents[1]
+        rule = "the pre-fix code fails and the post-fix code passes under the same reproduction method"
+        reviews = {
+            "build-from-plan": rendered_step_text(root, "build-from-plan", "review"),
+            "build-from-decompose": rendered_step_text(root, "build-from-decompose", "review"),
+            "build-basic": expansion_node_text(root, "build-basic", "review", ".test-evidence-review"),
+        }
+        for formula, raw in reviews.items():
+            text = self._flat(raw)
+            for fragment in (rule, "the repo's AGENTS.md names it", "`cannot_reproduce`",
+                             "Never demand evidence the repo cannot produce."):
+                with self.subTest(formula=formula, step="review", fragment=fragment):
+                    self.assertIn(fragment, text)
+        facts = "Verify load-bearing facts before any wording concern: the SHAs, what actually failed, and the failing code's content at the failure SHA"
+        for formula, raw in (
+            ("build-from-plan", reviews["build-from-plan"]),
+            ("build-from-decompose", reviews["build-from-decompose"]),
+            ("build-basic", expansion_node_text(root, "build-basic", "review", ".synthesize-review")),
+        ):
+            with self.subTest(formula=formula, fragment="load-bearing facts"):
+                self.assertIn(facts, self._flat(raw))
+        for formula in ("build-from-plan", "build-from-decompose"):
+            text = self._flat(reviews[formula])
+            self.assertIn("the verdict is `blocked` with reason `cannot_reproduce`", text)
+            self.assertIn("never `approved`, never a skip", text)
+        for formula in self.R13_BUILD_FORMULAS:
+            text = self._flat(repair_step_text(root, formula))
+            for fragment in ("under the same reproduction method", "do not guess-fix", "`cannot_reproduce`"):
+                with self.subTest(formula=formula, step="repair", fragment=fragment):
+                    self.assertIn(fragment, text)
+            # cannot_reproduce is a reason, never a new failure_class.
+            self.assertNotIn("gc.failure_class=cannot_reproduce", text)
+        for formula in ("build-from-plan", "build-from-decompose"):
+            text = self._flat(repair_step_text(root, formula))
+            for fragment in (
+                "`gc.build.repair_status=blocked`",
+                "`gc.failure_class=review_repair_blocked`",
+                "`gc.restart.reason=cannot_reproduce`",
+            ):
+                with self.subTest(formula=formula, step="repair", fragment=fragment):
+                    self.assertIn(fragment, text)
+        basic = self._flat(repair_step_text(root, "build-basic"))
+        for fragment in (
+            "`gc.failure_class=hard`",
+            "`gc.failure_reason=cannot_reproduce`",
+            "Except for the `cannot_reproduce` stop above, always close with `gc.outcome=pass`",
+        ):
+            with self.subTest(formula="build-basic", step="repair", fragment=fragment):
+                self.assertIn(fragment, basic)
+
     def test_preflight_review_instruction_stays_synchronized(self) -> None:
         # build-base and build-from-review-base are separate root formulas
         # (see GC-METH-016 / GC-METH-001) that each carry their own copy of

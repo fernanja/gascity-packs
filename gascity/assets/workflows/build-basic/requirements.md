@@ -41,6 +41,12 @@ Use the same expectations as the `generate-requirements` stage in the GitHub
 issue fix workflow. Preserve the input target, normalize the artifact path, and
 make the acceptance criteria specific enough for plan review.
 
+Re-check bundled sources first. For each bead, bug report, or cited
+`file:line` in the input, run `gc bd show <id>` (status, close reason) and
+read the cited lines on the current base branch. A source closed with a fixing
+commit, or whose cited code changed since the failure was recorded, is not a
+live requirement: drop it citing that evidence, or record an open question.
+
 Keep the artifact approachable for a first factory run. Include the required
 schema sections:
 

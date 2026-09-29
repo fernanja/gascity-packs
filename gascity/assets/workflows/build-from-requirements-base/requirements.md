@@ -4,6 +4,12 @@ Produce or reuse the requirements artifact at `{{requirements_path}}` when
 provided; otherwise write the default requirements artifact under
 `{{artifact_root}}`.
 
+Re-check bundled sources first. For each bead, bug report, or cited
+`file:line` in the input, run `gc bd show <id>` (status, close reason) and
+read the cited lines on the current base branch. A source closed with a fixing
+commit, or whose cited code changed since the failure was recorded, is not a
+live requirement: drop it citing that evidence, or record an open question.
+
 The requirements artifact must use the base requirements contract, stable IDs,
 example mapping, acceptance criteria, open questions, out-of-scope notes, and
 approval state. Close only after the requirements path and content hash are
