@@ -10,6 +10,10 @@ constraints (e.g. "no edits under X"). If a scope ban makes a criterion
 unreachable, record a blocking finding naming the criterion, the ban, and the
 call-path hop that needs the edit. Never approve around the conflict.
 
+Treat an acceptance criterion with no observation method, or one the test
+environment cannot observe with no stated alternative verification, as a
+blocking finding.
+
 Mark every specific, actionable note (e.g. "measure first", "X is the page's
 responsibility") as `advisory` or `must-address`, and list the must-address
 notes under `## Must-Address Notes` in the plan-review artifact.

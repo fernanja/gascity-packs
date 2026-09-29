@@ -13,6 +13,14 @@ at the consumer-facing layer, not only on the primitive. When this build is one
 part of a multi-part effort, list each dependency on an earlier part's
 deliverable with its concrete call path.
 
+Name how each acceptance criterion is observed: the test, command, or
+measurement that proves it, and confirm the test environment can actually
+observe it (e.g. headless Chromium never draws classic scrollbars, so a
+scrollbar-gutter width can only be modelled there). If it cannot, say so and
+name the real verification instead (another environment or tool, a headed
+run, or a documented manual check with evidence). Never fall back silently to
+modelling, and never skip verification.
+
 The plan must preserve requirement traceability, upstream hashes, assumptions,
 risks, out-of-scope work, and verification strategy. Before closing this step,
 resolve the workflow root bead id from `gc.root_bead_id` on this step bead, then

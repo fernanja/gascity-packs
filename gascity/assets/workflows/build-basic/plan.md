@@ -53,6 +53,14 @@ at the consumer-facing layer, not only on the primitive. When this build is one
 part of a multi-part effort, list each dependency on an earlier part's
 deliverable with its concrete call path.
 
+Name how each acceptance criterion is observed: the test, command, or
+measurement that proves it, and confirm the test environment can actually
+observe it (e.g. headless Chromium never draws classic scrollbars, so a
+scrollbar-gutter width can only be modelled there). If it cannot, say so and
+name the real verification instead (another environment or tool, a headed
+run, or a documented manual check with evidence). Never fall back silently to
+modelling, and never skip verification.
+
 Record the implementation plan path on the workflow root bead before closing.
 Use `gc bd update "<workflow-root-id>" --set-metadata "gc.build.plan_path=<absolute path>"`.
 Do not use `gc bd update --metadata 'key=value'`; `--metadata` only accepts a JSON

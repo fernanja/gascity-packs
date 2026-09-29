@@ -2046,6 +2046,32 @@ class FormulaAssetTests(unittest.TestCase):
         self.assertIn("do not write a flat ban", mayor)
         self.assertIn("sanctioned exception", mayor)
 
+    def test_plan_names_how_each_criterion_is_observed(self) -> None:
+        # R13 Part 1 lost 2 review rounds: headless Chromium never draws
+        # classic scrollbars, so a scrollbar-gutter AC could only be
+        # modelled, and headed Vitest was broken. The plan must name an
+        # observation method the environment can really use (or the real
+        # alternative), and plan-review must block when it does not.
+        root = pathlib.Path(__file__).resolve().parents[1]
+        for formula in ("build-from-plan", "build-basic", "build-from-requirements"):
+            plan = rendered_step_text(root, formula, "plan")
+            for fragment in (
+                "Name how each acceptance criterion is observed",
+                "confirm the test environment can actually\nobserve it",
+                "headless Chromium never draws classic scrollbars",
+                "a documented manual check with evidence",
+                "Never fall back silently to\nmodelling, and never skip verification.",
+            ):
+                with self.subTest(formula=formula, step="plan", fragment=fragment):
+                    self.assertIn(fragment, plan)
+            review = rendered_step_text(root, formula, "plan-review")
+            for fragment in (
+                "acceptance criterion with no observation method",
+                "cannot observe with no stated alternative verification, as a\nblocking finding",
+            ):
+                with self.subTest(formula=formula, step="plan-review", fragment=fragment):
+                    self.assertIn(fragment, review)
+
     def test_implementation_and_repair_run_self_check_before_review(self) -> None:
         # R13: 11 of 15 repair loops were implementation errors a self-check
         # catches (unreachable cited SHAs, metadata/text mismatches, skeleton
