@@ -4,7 +4,9 @@ import json
 import os
 import pathlib
 import re
+import shutil
 import subprocess
+import sys
 import tempfile
 import tomllib
 import unittest
@@ -219,12 +221,19 @@ MODE_VAR_DEFAULTS = {
     "github-pr-review": {"interaction_mode": "interactive", "review_mode": "report"},
 }
 
-BUILD_ARTIFACT_CHECK_SCRIPT = ".gc/scripts/checks/build-artifact-valid.sh"
+BUILD_ARTIFACT_CHECK_SCRIPT = "../assets/scripts/checks/build-artifact-valid.sh"
+
+# Agents pre-run the gate from the rig root; this resolves the same pinned-pack
+# script gc's parser picks (last formula layer that ships it), gc-yrouy.
+MANUAL_BUILD_ARTIFACT_CHECK_COMMAND = (
+    "GC_BEAD_ID=<claimed-step-id> "
+    '"$(gc formula list --json | python3 -c \'import json,os,sys; c=[os.path.join(os.path.dirname(p),"assets/scripts/checks/build-artifact-valid.sh") for p in json.load(sys.stdin)["search_paths"]]; print([p for p in c if os.path.isfile(p)][-1])\')"'
+)
 
 # Per-gate overrides of (script, timeout) for gates whose formula wires a
 # stricter check than the shared BUILD_ARTIFACT_CHECK_SCRIPT / "5m" default.
 BUILD_ARTIFACT_GATE_CHECK_OVERRIDES = {
-    ("review", "write-report"): (".gc/scripts/checks/preflight-evidence-valid.sh", "20m"),
+    ("review", "write-report"): ("../assets/scripts/checks/preflight-evidence-valid.sh", "20m"),
 }
 
 # One produce attempt plus two bounded schema-repair attempts per artifact stage.
@@ -2551,7 +2560,7 @@ class FormulaAssetTests(unittest.TestCase):
             text = (root / relative_path).read_text(encoding="utf-8")
             for fragment in (
                 "read the launcher rig root from the workflow root bead's `gc.work_dir`",
-                "GC_BEAD_ID=<claimed-step-id> .gc/scripts/checks/build-artifact-valid.sh",
+                MANUAL_BUILD_ARTIFACT_CHECK_COMMAND,
                 "fix every reported validation error before setting `gc.outcome=pass`",
             ):
                 with self.subTest(asset=relative_path, fragment=fragment):
@@ -3583,7 +3592,7 @@ class FormulaAssetTests(unittest.TestCase):
             design_loop["check"]["check"],
             {
                 "mode": "exec",
-                "path": ".gc/scripts/checks/design-review-approved.sh",
+                "path": "../assets/scripts/checks/design-review-approved.sh",
                 "timeout": "10m",
             },
         )
@@ -3603,7 +3612,7 @@ class FormulaAssetTests(unittest.TestCase):
             spec_loop["check"]["check"],
             {
                 "mode": "exec",
-                "path": ".gc/scripts/checks/design-review-approved.sh",
+                "path": "../assets/scripts/checks/design-review-approved.sh",
                 "timeout": "10m",
             },
         )
@@ -3693,7 +3702,7 @@ class FormulaAssetTests(unittest.TestCase):
         self.assertIn("waiting-human", spec_approval)
         self.assertIn("silence", spec_approval)
         self.assertIn("spec revision summary", spec_approval)
-        self.assertIn("Do not run `.gc/scripts/checks/design-review-approved.sh`", spec_approval)
+        self.assertIn("Do not run `../assets/scripts/checks/design-review-approved.sh`", spec_approval)
         self.assertIn("Do not use\n`gc bd update --metadata`", spec_approval)
         self.assertIn("--metadata-field gc.step_id=requirements.review-written-spec", spec_approval)
         self.assertIn("--metadata-field gc.step_id=requirements.apply-spec-feedback", spec_approval)
@@ -5484,7 +5493,7 @@ description = "Override sink that writes the base triage report contract."
                 step = next(step for step in formula["steps"] if step["id"] == step_id)
                 self.assertEqual(
                     step["check"]["check"]["path"],
-                    ".gc/scripts/checks/implementation-review-approved.sh",
+                    "../assets/scripts/checks/implementation-review-approved.sh",
                 )
 
         story_root = bmad_root / "assets" / "workflows" / "bmad-story-development"
@@ -5989,6 +5998,257 @@ description = "Override sink that writes the base triage report contract."
             write_report_step["expand_vars"]["artifact_path_keys"],
             artifact_keys,
         )
+
+
+
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+PACK_CHECK_ASSET_PREFIX = "../assets/scripts/checks/"
+MATERIALIZED_CHECK_PREFIX = ".gc/scripts/checks/"
+
+
+def _repo_packs() -> dict[str, pathlib.Path]:
+    return {
+        pack_toml.parent.name: pack_toml.parent
+        for pack_toml in sorted(REPO_ROOT.glob("*/pack.toml"))
+    }
+
+
+def _pack_layer_roots(pack_dir: pathlib.Path) -> list[pathlib.Path]:
+    """The pack's own dir followed by every pack it imports (local sources)."""
+    roots = [pack_dir]
+    data = tomllib.loads((pack_dir / "pack.toml").read_text(encoding="utf-8"))
+    for spec in (data.get("imports") or {}).values():
+        source = spec.get("source", "") if isinstance(spec, dict) else ""
+        if source.startswith("."):
+            imported = (pack_dir / source).resolve()
+            if (imported / "pack.toml").is_file():
+                roots.append(imported)
+    return roots
+
+
+def _formula_check_paths(steps: list[dict], out: list[tuple[str, str]]) -> None:
+    for step in steps or []:
+        check = (step.get("check") or {}).get("check") or {}
+        if check.get("path"):
+            out.append((step.get("id", "?"), check["path"]))
+        _formula_check_paths(step.get("children") or [], out)
+        _formula_check_paths((step.get("loop") or {}).get("body") or [], out)
+
+
+class PackCheckPathContractTests(unittest.TestCase):
+    """gc-yrouy: formula gates must run the pinned pack's check scripts.
+
+    `.gc/scripts/checks/<name>.sh` is resolved by the controller against the
+    rig/city root, where only hand-copied snapshots live (gc never
+    materializes pack assets there), so every pack change to a check script
+    was silently ignored. gc's formula parser rewrites only the
+    `../assets/scripts/checks/<name>.sh` form to the highest-priority formula
+    layer that ships the script, which follows every repin.
+    """
+
+    def test_no_pack_formula_or_prompt_references_materialized_check_scripts(self) -> None:
+        offenders = []
+        for pack_name, pack_dir in _repo_packs().items():
+            for pattern in ("formulas/**/*.toml", "assets/**/*.md", "assets/**/*.toml"):
+                for path in sorted(pack_dir.glob(pattern)):
+                    for lineno, line in enumerate(
+                        path.read_text(encoding="utf-8").splitlines(), start=1
+                    ):
+                        if MATERIALIZED_CHECK_PREFIX in line or ("cp -R" in line and ".gc/scripts" in line):
+                            offenders.append(f"{path.relative_to(REPO_ROOT)}:{lineno}")
+        self.assertEqual(
+            offenders,
+            [],
+            "formula gates and prompts must use the layer-resolved "
+            f"{PACK_CHECK_ASSET_PREFIX}<name>.sh form, not {MATERIALIZED_CHECK_PREFIX}",
+        )
+
+    def test_every_formula_check_path_resolves_to_a_shipped_executable_script(self) -> None:
+        checked = 0
+        for pack_name, pack_dir in _repo_packs().items():
+            layers = _pack_layer_roots(pack_dir)
+            for formula_path in sorted((pack_dir / "formulas").glob("*.toml")):
+                formula = tomllib.loads(formula_path.read_text(encoding="utf-8"))
+                paths: list[tuple[str, str]] = []
+                _formula_check_paths(formula.get("steps") or [], paths)
+                _formula_check_paths(formula.get("template") or [], paths)
+                for step_id, raw in paths:
+                    checked += 1
+                    with self.subTest(pack=pack_name, formula=formula_path.name, step=step_id):
+                        self.assertTrue(
+                            raw.startswith(PACK_CHECK_ASSET_PREFIX),
+                            f"check path {raw!r} is not layer-resolved",
+                        )
+                        rel = raw[len("../assets/"):]
+                        shipped = [
+                            layer / "assets" / rel
+                            for layer in layers
+                            if (layer / "assets" / rel).is_file()
+                        ]
+                        self.assertTrue(shipped, f"no layer ships {raw!r} (layers: {layers})")
+                        self.assertTrue(
+                            os.access(shipped[0], os.X_OK), f"{shipped[0]} is not executable"
+                        )
+        self.assertGreater(checked, 70)
+
+    def test_build_artifact_check_from_pack_layer_resolves_relative_path_under_ralph_env(self) -> None:
+        # Reproduces internal/dispatch/ralph.go runRalphCheck: the parser has
+        # rewritten the check path to <pack-cache>/gascity/assets/scripts/checks,
+        # cmd.Dir is the store root, and the env is the ConditionEnv whitelist
+        # (GC_STORE_PATH / GC_CITY*; no GC_RIG_ROOT, GC_BEADS_SCOPE_ROOT or
+        # GC_DIR; GC_WORK_DIR only when the bead inherits a work_dir).
+        for label, with_work_dir in (("no-work-dir", False), ("per-bead-work-dir", True)):
+            with self.subTest(case=label), tempfile.TemporaryDirectory() as td:
+                result, artifact = self._run_pack_layer_build_artifact_check(
+                    pathlib.Path(td), with_work_dir=with_work_dir
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn(f"path={artifact}", result.stdout)
+
+    def test_build_artifact_check_from_pack_layer_uses_pack_schemas(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            result, _ = self._run_pack_layer_build_artifact_check(
+                pathlib.Path(td), with_work_dir=False, schema="gc.build.review.v1"
+            )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("schema=gc.build.review.v1", result.stdout)
+
+    def test_manual_check_command_resolves_last_layer_that_ships_the_script(self) -> None:
+        # Mirrors formula.Parser.winningAssetPath: search paths are ordered
+        # lowest -> highest priority and the last layer that ships the asset wins.
+        with tempfile.TemporaryDirectory() as td:
+            tmp = pathlib.Path(td)
+            layers = []
+            for name, ships in (("low", True), ("gascity", True), ("city-local", False)):
+                formulas = tmp / name / "formulas"
+                formulas.mkdir(parents=True)
+                if ships:
+                    script = tmp / name / "assets" / "scripts" / "checks" / "build-artifact-valid.sh"
+                    script.parent.mkdir(parents=True)
+                    script.write_text(f"#!/bin/sh\necho ran-{name} bead=$GC_BEAD_ID\n", encoding="utf-8")
+                    script.chmod(0o755)
+                layers.append(str(formulas))
+            listing = tmp / "formula-list.json"
+            listing.write_text(json.dumps({"search_paths": layers}), encoding="utf-8")
+            bin_dir = tmp / "bin"
+            bin_dir.mkdir()
+            fake_gc = bin_dir / "gc"
+            fake_gc.write_text(f"#!/bin/sh\ncat '{listing}'\n", encoding="utf-8")
+            fake_gc.chmod(0o755)
+            command = MANUAL_BUILD_ARTIFACT_CHECK_COMMAND.replace("<claimed-step-id>", "step-1")
+            env = {
+                **os.environ,
+                "PATH": os.pathsep.join([str(bin_dir), str(pathlib.Path(sys.executable).parent), "/usr/bin", "/bin"]),
+            }
+            result = subprocess.run(
+                ["bash", "-c", command], env=env, text=True, capture_output=True, check=False
+            )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stdout.strip(), "ran-gascity bead=step-1")
+
+    def test_manual_check_prompts_use_the_layer_resolving_command(self) -> None:
+        root = REPO_ROOT / "gascity" / "assets" / "workflows"
+        for relative_path in (
+            "do-work/implement.md",
+            "do-work-item/implement-item.md",
+            "implementation-base/implement.md",
+            "implementation-item-base/implement-item.md",
+            "implement/summarize.md",
+            "build-base/summarize-implementation.md",
+            "review/write-report.md",
+        ):
+            with self.subTest(asset=relative_path):
+                self.assertIn(
+                    MANUAL_BUILD_ARTIFACT_CHECK_COMMAND,
+                    (root / relative_path).read_text(encoding="utf-8"),
+                )
+
+    def _run_pack_layer_build_artifact_check(
+        self,
+        tmp: pathlib.Path,
+        *,
+        with_work_dir: bool,
+        schema: str = "gc.build.requirements.v1",
+    ) -> tuple[subprocess.CompletedProcess, pathlib.Path]:
+        source_pack = REPO_ROOT / "gascity"
+        cached_pack = tmp / "gc-home" / "cache" / "repos" / "0123abcd" / "gascity"
+        shutil.copytree(source_pack / "assets" / "scripts", cached_pack / "assets" / "scripts")
+        shutil.copytree(source_pack / "schemas" / "build", cached_pack / "schemas" / "build")
+        shutil.copy2(source_pack / "pack.toml", cached_pack / "pack.toml")
+        check = cached_pack / "assets" / "scripts" / "checks" / "build-artifact-valid.sh"
+
+        city = tmp / "city"
+        store = tmp / "rig"
+        (city / ".gc").mkdir(parents=True)
+        (store / ".beads").mkdir(parents=True)
+        if schema == "gc.build.review.v1":
+            body, key = FormulaAssetTests._valid_review_artifact(), "gc.build.review_report_path"
+        else:
+            body, key = FormulaAssetTests._valid_requirements_artifact(), "gc.build.requirements_path"
+        artifact = store / "plans" / "run-1" / "artifact.md"
+        artifact.parent.mkdir(parents=True)
+        artifact.write_text(body, encoding="utf-8")
+
+        bin_dir = tmp / "bin"
+        bin_dir.mkdir()
+        show_dir = tmp / "show"
+        show_dir.mkdir()
+        (show_dir / "loop.json").write_text(
+            json.dumps([{"id": "loop", "metadata": {
+                "gc.root_bead_id": "root",
+                "gc.build.artifact_schema": schema,
+                "gc.build.artifact_path_keys": key,
+            }}]),
+            encoding="utf-8",
+        )
+        (show_dir / "root.json").write_text(
+            json.dumps([{"id": "root", "metadata": {key: "plans/run-1/artifact.md"}}]),
+            encoding="utf-8",
+        )
+        fake_gc = bin_dir / "gc"
+        fake_gc.write_text(
+            "#!/usr/bin/env bash\n"
+            "set -euo pipefail\n"
+            "if [ \"${1:-}\" = \"formula\" ]; then echo 'unexpected gc formula call' >&2; exit 3; fi\n"
+            "while [ \"${1:-}\" != \"bd\" ]; do [ $# -gt 0 ] || exit 2; shift; done\n"
+            "shift\n"
+            "case \"$1\" in\n"
+            "  show) cat \"" + str(show_dir) + "/$2.json\" ;;\n"
+            "  *) exit 2 ;;\n"
+            "esac\n",
+            encoding="utf-8",
+        )
+        fake_gc.chmod(0o755)
+
+        python_dir = pathlib.Path(sys.executable).parent
+        env = {
+            # convergence.ConditionEnv.Environ(): a whitelist, not os.environ.
+            "PATH": os.pathsep.join([str(bin_dir), str(python_dir), "/usr/bin", "/bin"]),
+            "HOME": str(city),
+            "GC_HOME": str(tmp / "gc-home"),
+            "TMPDIR": str(tmp),
+            "BEADS_DIR": str(store / ".beads"),
+            "GC_BEAD_ID": "loop",
+            "GC_ITERATION": "1",
+            "GC_WISP_ID": "",
+            "GC_ITERATION_DURATION_MS": "0",
+            "GC_CUMULATIVE_DURATION_MS": "0",
+            "GC_MAX_ITERATIONS": "0",
+            "GC_CITY": str(city),
+            "GC_CITY_PATH": str(city),
+            "GC_CITY_RUNTIME_DIR": str(city / ".gc" / "runtime"),
+            "GC_STORE_PATH": str(store),
+        }
+        cwd = store
+        if with_work_dir:
+            work_dir = tmp / "worktrees" / "per-bead"
+            work_dir.mkdir(parents=True)
+            env["GC_WORK_DIR"] = str(work_dir)
+            cwd = work_dir
+        result = subprocess.run(
+            [str(check)], cwd=cwd, env=env, text=True, capture_output=True, check=False
+        )
+        return result, artifact
 
 
 if __name__ == "__main__":

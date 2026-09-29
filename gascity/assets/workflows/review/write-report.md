@@ -27,7 +27,7 @@ structured fix handoff for the caller's review-fix formula to apply; in
 and reason recorded in the report. The interaction posture is
 `{{interaction_mode}}`.
 
-Artifact validation: this step is gated by `.gc/scripts/checks/build-artifact-valid.sh`, which validates the report recorded at `gc.build.review_report_path` (fallback `gc.var.report_path`) against schema `gc.build.review.v1`. On repair attempts (`gc.attempt` greater than 1), read the validator errors from `gc.attempt_log` on the validation loop control bead (the dependent of this step bead) and repair the report in place instead of rewriting it. Two bounded repair attempts follow the first failure; exhausting them closes this stage with `gc.outcome=fail` and machine-readable validation errors that block downstream stages. Never ask questions in headless mode; record unresolved ambiguity inside the report.
+Artifact validation: this step is gated by `../assets/scripts/checks/build-artifact-valid.sh`, which validates the report recorded at `gc.build.review_report_path` (fallback `gc.var.report_path`) against schema `gc.build.review.v1`. On repair attempts (`gc.attempt` greater than 1), read the validator errors from `gc.attempt_log` on the validation loop control bead (the dependent of this step bead) and repair the report in place instead of rewriting it. Two bounded repair attempts follow the first failure; exhausting them closes this stage with `gc.outcome=fail` and machine-readable validation errors that block downstream stages. Never ask questions in headless mode; record unresolved ambiguity inside the report.
 
 ## Required artifact location
 
@@ -45,9 +45,11 @@ gc bd update "<workflow-root-id>" \
   --set-metadata 'gc.build.review_report_path={{report_path}}'
 ```
 
-From `$GC_RIG_ROOT`, run the artifact validator with the claimed bead id. Fix
-any error before setting `gc.outcome=pass`:
+From `$GC_RIG_ROOT`, run the pinned pack's copy of the artifact validator (the
+command resolves the gate script through gc's formula layers, exactly as the
+controller does) with the claimed bead id. Fix any error before setting
+`gc.outcome=pass`:
 
 ```bash
-GC_BEAD_ID=<claimed-step-id> .gc/scripts/checks/build-artifact-valid.sh
+GC_BEAD_ID=<claimed-step-id> "$(gc formula list --json | python3 -c 'import json,os,sys; c=[os.path.join(os.path.dirname(p),"assets/scripts/checks/build-artifact-valid.sh") for p in json.load(sys.stdin)["search_paths"]]; print([p for p in c if os.path.isfile(p)][-1])')"
 ```

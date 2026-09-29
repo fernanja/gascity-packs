@@ -84,15 +84,21 @@ case "$ARTIFACT_PATH" in
     # per-bead worktree, so GC_WORK_DIR points at the wrong place whenever the
     # runtime provides the durable rig root. Controller checks use
     # GC_BEADS_SCOPE_ROOT on some runtimes, while agent sessions use
-    # GC_RIG_ROOT. Older controllers supply neither but execute the installed
-    # check from <rig>/.gc/scripts/checks, which is another durable root
-    # signal. Do not use that fallback for a source-tree script.
+    # GC_RIG_ROOT. A legacy hand-copied check under <rig>/.gc/scripts/checks
+    # derives the root from its own location. Do not use that fallback for a
+    # source-tree or pack-cache script. The ralph controller runs the formula's
+    # layer-resolved ../assets/scripts/checks/<name>.sh straight from the pinned
+    # pack (gc-yrouy) and exports the owning store root (rig or city) as
+    # GC_STORE_PATH, which is the durable root the artifact paths are relative to.
     ARTIFACT_ROOT="${GC_RIG_ROOT:-${GC_BEADS_SCOPE_ROOT:-${GC_DIR:-}}}"
     if [ -z "$ARTIFACT_ROOT" ]; then
       INSTALLED_RIG_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
       if [ -d "$INSTALLED_RIG_ROOT/.gc" ]; then
         ARTIFACT_ROOT="$INSTALLED_RIG_ROOT"
       fi
+    fi
+    if [ -z "$ARTIFACT_ROOT" ]; then
+      ARTIFACT_ROOT="${GC_STORE_PATH:-}"
     fi
     if [ -n "$ARTIFACT_ROOT" ]; then
       ARTIFACT_PATH="$ARTIFACT_ROOT/$ARTIFACT_PATH"
