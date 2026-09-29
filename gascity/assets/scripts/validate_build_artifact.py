@@ -5,6 +5,8 @@ import argparse
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,9 +17,20 @@ try:
 except ImportError:  # pragma: no cover
     yaml = None
 
+try:
+    import tomllib
+except ImportError:  # pragma: no cover - Python < 3.11
+    tomllib = None
+
 
 FRONT_MATTER_RE = re.compile(r"\A---\n(?P<front>.*?)\n---(?:\n|\Z)(?P<body>.*)\Z", re.DOTALL)
-SCHEMA_ROOT = Path(__file__).resolve().parents[2] / "schemas" / "build"
+SCRIPT_DIR = Path(__file__).resolve().parent
+# In the pack tree this script lives at <pack>/assets/scripts/, so the base
+# schemas sit at <pack>/schemas/build.
+SCHEMA_ROOT = SCRIPT_DIR.parents[1] / "schemas" / "build"
+BASE_PACK_NAME = "gascity"
+PACK_NAME_RE = re.compile(r'^\[pack\][^\[]*?^name\s*=\s*"([^"]*)"', re.MULTILINE | re.DOTALL)
+INSTALLED_PACK_LOOKUP_TIMEOUT_SECONDS = 60
 FORBIDDEN_REQUIRED_FIELD_NAMES = {"owner", "stage-owner", "stage_owner", "persona", "role"}
 
 
@@ -74,13 +87,96 @@ def parse_front_matter(text: str) -> tuple[str, dict[str, Any], str]:
     return schema_id, data, match.group("body")
 
 
+def materialized_scope_root() -> Path | None:
+    # A copy installed at <scope-root>/.gc/scripts/ (city or rig root) has no
+    # schemas/ beside it, and nothing refreshes such copies on a repin, so a
+    # sibling schemas/build there (if any) is an unmanaged snapshot.
+    if SCRIPT_DIR.name == "scripts" and SCRIPT_DIR.parent.name == ".gc":
+        return SCRIPT_DIR.parent.parent
+    return None
+
+
+def _pack_name(pack_dir: Path) -> str:
+    try:
+        text = (pack_dir / "pack.toml").read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return ""
+    if tomllib is None:  # pragma: no cover - Python < 3.11
+        match = PACK_NAME_RE.search(text)
+        return match.group(1) if match else ""
+    try:
+        data = tomllib.loads(text)
+    except tomllib.TOMLDecodeError:
+        return ""
+    pack = data.get("pack")
+    name = pack.get("name", "") if isinstance(pack, dict) else ""
+    return name if isinstance(name, str) else ""
+
+
+def installed_pack_schema_root(scope_root: Path) -> Path | None:
+    """Return <pack>/schemas/build for the gascity pack gc has installed for scope_root.
+
+    gc resolves each pack import to a pinned cache directory and reports its
+    formula layers (<pack>/formulas) via `gc formula list --json`; the base
+    schemas ship beside them. Asking gc on every run keeps a materialized
+    validator on the currently pinned schemas across repins. Returns None when
+    gc is unavailable or reports no gascity pack; callers then fail closed.
+    """
+    gc = shutil.which("gc")
+    if gc is None:
+        return None
+    try:
+        proc = subprocess.run(
+            [gc, "formula", "list", "--json"],
+            cwd=scope_root,
+            capture_output=True,
+            text=True,
+            timeout=INSTALLED_PACK_LOOKUP_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    try:
+        data = json.loads(proc.stdout)
+    except ValueError:
+        return None
+    search_paths = data.get("search_paths") if isinstance(data, dict) else None
+    if not isinstance(search_paths, list):
+        return None
+    found: Path | None = None
+    for raw in search_paths:
+        if not isinstance(raw, str) or not raw.strip():
+            continue
+        pack_dir = Path(raw.strip()).parent
+        schema_dir = pack_dir / "schemas" / "build"
+        if schema_dir.is_dir() and _pack_name(pack_dir) == BASE_PACK_NAME:
+            # Search paths run lowest to highest priority; keep the last match
+            # so a rig-level gascity import wins, as it does for formulas.
+            found = schema_dir
+    return found
+
+
+def base_schema_root() -> Path:
+    scope_root = materialized_scope_root()
+    if scope_root is None:
+        return SCHEMA_ROOT
+    installed = installed_pack_schema_root(scope_root)
+    if installed is not None:
+        return installed
+    # gc could not name the installed pack: fall back to whatever sits beside
+    # the copy. When nothing does, every schema id stays unknown (fail closed).
+    return SCHEMA_ROOT
+
+
 def schema_roots() -> list[Path]:
     # Base root always first: a published base schema id resolves from the
     # base pack before any extra root is consulted, so extra roots can only
     # ADD new ids — they can never shadow or relax a published base schema
     # (REQUIREMENTS "Schema IDs are immutable compatibility contracts").
     # GC_BUILD_SCHEMA_ROOTS is os.pathsep-separated; missing dirs are skipped.
-    roots = [SCHEMA_ROOT]
+    roots = [base_schema_root()]
     for raw in os.environ.get("GC_BUILD_SCHEMA_ROOTS", "").split(os.pathsep):
         raw = raw.strip()
         if not raw:
@@ -94,13 +190,15 @@ def schema_roots() -> list[Path]:
 def load_schema(schema_id: str) -> dict[str, Any]:
     if yaml is None:
         raise ValidationError("PyYAML is required to parse build schemas")
-    for root in schema_roots():
+    roots = schema_roots()
+    for root in roots:
         for path in sorted(root.glob("*.yaml")):
             raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
             if isinstance(raw, dict) and raw.get("schema_id") == schema_id:
                 validate_schema_definition(raw)
                 return raw
-    raise ValidationError(f"unknown build artifact schema {schema_id!r}")
+    searched = os.pathsep.join(str(root) for root in roots)
+    raise ValidationError(f"unknown build artifact schema {schema_id!r} (searched schema roots: {searched})")
 
 
 def validate_schema_definition(schema: dict[str, Any]) -> None:

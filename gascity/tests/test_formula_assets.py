@@ -4744,7 +4744,12 @@ description = "Override sink that writes the base triage report contract."
             fake_gc.write_text(
                 "#!/usr/bin/env bash\n"
                 "set -euo pipefail\n"
-                "while [ \"${1:-}\" != \"bd\" ]; do shift; done\n"
+                "if [ \"${1:-}\" = \"formula\" ] && [ \"${2:-}\" = \"list\" ]; then\n"
+                "  [ -n \"${FORMULA_LIST_JSON:-}\" ] || exit 2\n"
+                "  cat \"$FORMULA_LIST_JSON\"\n"
+                "  exit 0\n"
+                "fi\n"
+                "while [ \"${1:-}\" != \"bd\" ]; do [ $# -gt 0 ] || exit 2; shift; done\n"
                 "shift\n"
                 "case \"$1\" in\n"
                 "  version) exit 0 ;;\n"
@@ -5289,6 +5294,125 @@ description = "Override sink that writes the base triage report contract."
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn(str(artifact), result.stdout)
+
+    @staticmethod
+    def _valid_review_artifact() -> str:
+        return (
+            "---\n"
+            "schema: gc.build.review.v1\n"
+            "workflow:\n"
+            "  id: build-20260929-001\n"
+            "  formula: build-from-plan\n"
+            "methodology:\n"
+            "  pack: gascity\n"
+            "  name: build-from-plan\n"
+            "producer:\n"
+            "  formula: code-review-base\n"
+            "  stage: review\n"
+            "  attempt: 1\n"
+            "status: approved\n"
+            "trace:\n"
+            "  upstream:\n"
+            "    - path: implementation-plan.md\n"
+            "      hash: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+            "  coverage:\n"
+            "    - id: GC-METH-001\n"
+            "      status: covered\n"
+            "---\n"
+            "\n"
+            "## Verdict\n\nApproved.\n\n"
+            "| ID | Status |\n"
+            "| --- | --- |\n"
+            "| GC-METH-001 | covered |\n\n"
+            "## Findings\n\nNone.\n\n"
+            "## Verification\n\nRan the suite.\n"
+        )
+
+    def _run_materialized_review_check(
+        self,
+        tmp: pathlib.Path,
+        *,
+        installed_pack: pathlib.Path | None,
+    ) -> subprocess.CompletedProcess:
+        # Mirrors a city/rig root whose .gc/scripts holds copies of the pack's
+        # check + validator: gc copies nothing else there, so no schemas/ sits
+        # beside the copies (gc-qcs76). The pinned pack is only discoverable
+        # through gc's formula search paths.
+        rig_root = tmp / "root"
+        artifact = rig_root / "plans" / "review-report.md"
+        artifact.parent.mkdir(parents=True)
+        artifact.write_text(self._valid_review_artifact(), encoding="utf-8")
+        per_bead_worktree = tmp / "per-bead-worktree"
+        per_bead_worktree.mkdir()
+        control = (
+            '[{"id": "loop", "metadata": {'
+            '"gc.root_bead_id": "root", '
+            '"gc.build.artifact_schema": "gc.build.review.v1", '
+            '"gc.build.artifact_path_keys": "gc.build.review_report_path"}}]'
+        )
+        root_bead = (
+            '[{"id": "root", "metadata": {'
+            '"gc.build.review_report_path": "plans/review-report.md"'
+            '}}]'
+        )
+        extra_env = {
+            "GC_RIG_ROOT": str(rig_root),
+            "GC_WORK_DIR": str(per_bead_worktree),
+            "GC_BUILD_SCHEMA_ROOTS": "",
+        }
+        if installed_pack is not None:
+            formula_list = tmp / "formula-list.json"
+            formula_list.write_text(
+                json.dumps({"ok": True, "search_paths": [str(installed_pack / "formulas")]}),
+                encoding="utf-8",
+            )
+            extra_env["FORMULA_LIST_JSON"] = str(formula_list)
+        else:
+            extra_env["FORMULA_LIST_JSON"] = ""
+        return self._run_build_artifact_check(
+            {"loop": control, "root": root_bead},
+            "loop",
+            extra_env=extra_env,
+            script_root=rig_root,
+        )
+
+    def test_materialized_build_artifact_check_resolves_installed_pack_schemas(self) -> None:
+        source_root = pathlib.Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as td:
+            tmp = pathlib.Path(td)
+            self.assertFalse((tmp / "root" / "schemas").exists())
+            result = self._run_materialized_review_check(tmp, installed_pack=source_root)
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("build artifact valid: schema=gc.build.review.v1", result.stdout)
+
+    def test_materialized_build_artifact_check_prefers_installed_pack_over_stale_local_schemas(self) -> None:
+        # A hand-copied <root>/schemas/build (what ascent carries) is not kept
+        # current across repins; the pinned pack's schemas must win over it.
+        source_root = pathlib.Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as td:
+            tmp = pathlib.Path(td)
+            stale = tmp / "root" / "schemas" / "build"
+            stale.mkdir(parents=True)
+            (stale / "review.v1.yaml").write_text(
+                "schema_id: gc.build.review.v1\n"
+                "required_front_matter: [schema, status, trace]\n"
+                "allowed_statuses: [approved]\n"
+                "coverage_statuses: [covered]\n"
+                "required_sections: [Stale Section Removed Upstream]\n",
+                encoding="utf-8",
+            )
+            result = self._run_materialized_review_check(tmp, installed_pack=source_root)
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("build artifact valid: schema=gc.build.review.v1", result.stdout)
+
+    def test_materialized_build_artifact_check_fails_closed_without_installed_pack(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            result = self._run_materialized_review_check(pathlib.Path(td), installed_pack=None)
+
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("unknown build artifact schema 'gc.build.review.v1'", result.stderr)
 
     def test_build_artifact_check_blocks_invalid_artifact_with_repair_context(self) -> None:
         with tempfile.TemporaryDirectory() as artifact_dir:

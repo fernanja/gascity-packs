@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import importlib.util
+import json
 import os
 import pathlib
 import sys
@@ -600,6 +602,127 @@ class BuildArtifactSchemaRootsTests(unittest.TestCase):
                 build_artifact_validator.schema_roots(),
                 [build_artifact_validator.SCHEMA_ROOT],
             )
+
+
+
+class MaterializedBuildArtifactValidatorTests(unittest.TestCase):
+    """A copy at <scope-root>/.gc/scripts/ resolves base schemas from the pack gc installed (gc-qcs76)."""
+
+    PACK_ROOT = pathlib.Path(__file__).resolve().parents[1]
+    VALIDATOR = PACK_ROOT / "assets" / "scripts" / "validate_build_artifact.py"
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = pathlib.Path(self._tmp.name)
+        self.scope_root = self.tmp / "root"
+        scripts = self.scope_root / ".gc" / "scripts"
+        scripts.mkdir(parents=True)
+        self.copy = scripts / self.VALIDATOR.name
+        self.copy.write_text(self.VALIDATOR.read_text(encoding="utf-8"), encoding="utf-8")
+        self.bin_dir = self.tmp / "bin"
+        self.bin_dir.mkdir()
+        self.calls = self.tmp / "gc-calls.log"
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _fake_gc(self, search_paths: list[pathlib.Path]) -> None:
+        payload = self.tmp / "formula-list.json"
+        payload.write_text(json.dumps({"ok": True, "search_paths": [str(p) for p in search_paths]}), encoding="utf-8")
+        gc = self.bin_dir / "gc"
+        gc.write_text(
+            "#!/usr/bin/env bash\n"
+            f"echo \"$PWD $*\" >> '{self.calls}'\n"
+            "[ \"$1 $2 $3\" = 'formula list --json' ] || exit 2\n"
+            f"cat '{payload}'\n",
+            encoding="utf-8",
+        )
+        gc.chmod(0o755)
+
+    def _load_copy(self):
+        name = f"materialized_validator_{id(self)}"
+        spec = importlib.util.spec_from_file_location(name, self.copy)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        self.addCleanup(sys.modules.pop, name, None)
+        spec.loader.exec_module(module)
+        return module
+
+    def _env(self) -> dict[str, str]:
+        env = {k: v for k, v in os.environ.items() if k != "GC_BUILD_SCHEMA_ROOTS"}
+        # Only the fake gc plus the system dirs bash/cat live in; never a real gc.
+        env["PATH"] = os.pathsep.join([str(self.bin_dir), "/usr/bin", "/bin"])
+        return env
+
+    def _fake_pack(self, name: str, pack_name: str) -> pathlib.Path:
+        pack = self.tmp / name
+        (pack / "formulas").mkdir(parents=True)
+        (pack / "pack.toml").write_text(f'[pack]\nname = "{pack_name}"\nschema = 2\n', encoding="utf-8")
+        schemas = pack / "schemas" / "build"
+        schemas.mkdir(parents=True)
+        for schema in (self.PACK_ROOT / "schemas" / "build").glob("*.yaml"):
+            (schemas / schema.name).write_text(schema.read_text(encoding="utf-8"), encoding="utf-8")
+        return pack
+
+    def test_copy_uses_installed_gascity_pack_as_base_root(self) -> None:
+        other = self._fake_pack("other-pack", "compound-engineering")
+        installed = self._fake_pack("installed-gascity", "gascity")
+        self._fake_gc([other / "formulas", installed / "formulas", self.tmp / "missing" / "formulas"])
+        validator = self._load_copy()
+        with mock.patch.dict(os.environ, self._env(), clear=True):
+            self.assertEqual(validator.schema_roots(), [installed / "schemas" / "build"])
+            schema = validator.load_schema("gc.build.review.v1")
+        self.assertEqual(schema["schema_id"], "gc.build.review.v1")
+        # gc is asked from the scope root, so rig-level imports are honored.
+        self.assertIn(str(self.scope_root.resolve()), self.calls.read_text(encoding="utf-8"))
+
+    def test_copy_still_rejects_unknown_schema_ids(self) -> None:
+        installed = self._fake_pack("installed-gascity", "gascity")
+        self._fake_gc([installed / "formulas"])
+        validator = self._load_copy()
+        with mock.patch.dict(os.environ, self._env(), clear=True):
+            with self.assertRaisesRegex(validator.ValidationError, "unknown build artifact schema 'acme.build.custom.v1'"):
+                validator.load_schema("acme.build.custom.v1")
+
+    def test_extra_root_cannot_shadow_discovered_base_schema(self) -> None:
+        installed = self._fake_pack("installed-gascity", "gascity")
+        self._fake_gc([installed / "formulas"])
+        extra = self.tmp / "extra"
+        extra.mkdir()
+        (extra / "review.v1.yaml").write_text(
+            "schema_id: gc.build.review.v1\n"
+            "required_front_matter: [schema]\n"
+            "allowed_statuses: [approved]\n"
+            "coverage_statuses: [covered]\n"
+            "required_sections: []\n",
+            encoding="utf-8",
+        )
+        validator = self._load_copy()
+        env = {**self._env(), "GC_BUILD_SCHEMA_ROOTS": str(extra)}
+        with mock.patch.dict(os.environ, env, clear=True):
+            self.assertEqual(validator.schema_roots(), [installed / "schemas" / "build", extra])
+            schema = validator.load_schema("gc.build.review.v1")
+        self.assertIn("workflow.id", schema["required_front_matter"])
+
+    def test_copy_ignores_non_gascity_packs_and_fails_closed(self) -> None:
+        other = self._fake_pack("other-pack", "compound-engineering")
+        self._fake_gc([other / "formulas"])
+        validator = self._load_copy()
+        with mock.patch.dict(os.environ, self._env(), clear=True):
+            with self.assertRaisesRegex(validator.ValidationError, "unknown build artifact schema 'gc.build.review.v1'"):
+                validator.load_schema("gc.build.review.v1")
+
+    def test_copy_without_gc_on_path_fails_closed(self) -> None:
+        validator = self._load_copy()
+        with mock.patch.dict(os.environ, self._env(), clear=True):
+            with self.assertRaisesRegex(validator.ValidationError, "unknown build artifact schema 'gc.build.review.v1'"):
+                validator.load_schema("gc.build.review.v1")
+
+    def test_pack_tree_validator_never_asks_gc(self) -> None:
+        self._fake_gc([])
+        with mock.patch.dict(os.environ, self._env(), clear=True):
+            self.assertEqual(build_artifact_validator.schema_roots(), [build_artifact_validator.SCHEMA_ROOT])
+        self.assertFalse(self.calls.exists())
 
 
 if __name__ == "__main__":
