@@ -35,12 +35,23 @@ because a human manually converted it to draft). PR creation and readiness
 belong exclusively to the publish step, after review and repair-review
 approve.
 
-Write the per-item implementation summary as a `gc.build.implementation-summary.v1`
-artifact and record its absolute path on the workflow root bead as
-`gc.implementation.summary_path` before closing. Write this artifact inside
-`$WORKTREE`, never the launcher checkout — the same boundary that applies to
-source reads, edits, tests, hashes, and commits above applies to this write
-too (gc-6svtga).
+Write the per-item implementation summary as a
+`gc.build.implementation-summary.v1` artifact at a bead-scoped path outside
+the repo's tracked tree:
+`{{artifact_root}}/task-<source-anchor-id>-summary.md`, the path
+`do-work`'s `close-source-anchor` targets. Resolve a relative artifact root
+against the launcher rig root in `gc.work_dir`. Only if the artifact root is
+blank or an unfilled placeholder, use
+`$WORKTREE/.gc-artifacts/<source-anchor-id>/summary.md`; it must never be
+committed. Record the absolute path on the workflow root bead as
+`gc.implementation.summary_path` before closing. Never write it at the
+worktree root, to a shared `.gc-artifacts/implementation-summary.md`, or to
+the root rollup `implementation-summary.md` (gc-6svtga, gcas-j201cw).
+
+The commit holds only the change itself: stage changed files by name, never
+`git add -A` or `git add .`, and before committing confirm
+`git diff --cached --name-only` lists no summary, report, or other workflow
+artifact.
 
 The summary body must contain these exact schema-required `##` headings in this
 order:

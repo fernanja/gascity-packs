@@ -650,6 +650,13 @@ def drained_formula_text(root: pathlib.Path, formula: str, step_id: str) -> str:
     return "\n".join(node_description(root, step) for step in drained["steps"])
 
 
+def drained_step_text(root: pathlib.Path, formula: str, step_id: str, drained_step_id: str) -> str:
+    """Rendered prose of one step in the formula a drain step dispatches."""
+    steps = {step["id"]: step for step in resolve_formula(root, formula)["steps"]}
+    drained = resolve_formula(root, steps[step_id]["drain"]["formula"])
+    return node_description(root, {step["id"]: step for step in drained["steps"]}[drained_step_id])
+
+
 def expansion_node_text(root: pathlib.Path, formula: str, step_id: str, suffix: str) -> str:
     """Rendered prose of one node in the expansion a step expands into."""
     steps = {step["id"]: step for step in resolve_formula(root, formula)["steps"]}
@@ -2550,21 +2557,29 @@ class FormulaAssetTests(unittest.TestCase):
                 with self.subTest(asset=relative_path, fragment=fragment):
                     self.assertIn(fragment, text)
 
-    def test_per_item_implement_steps_require_worktree_scoped_summary_write(
+    SUMMARY_PATH_FRAGMENTS = (
+        "outside the repo's tracked tree",
+        "`{{artifact_root}}/task-<source-anchor-id>-summary.md`",
+        "Resolve a relative artifact root against the launcher rig root in `gc.work_dir`",
+        "Only if the artifact root is blank or an unfilled placeholder, use `$WORKTREE/.gc-artifacts/<source-anchor-id>/summary.md`; it must never be committed",
+        "Record the absolute path on the workflow root bead as `gc.implementation.summary_path`",
+        "Never write it at the worktree root",
+        "never `git add -A` or `git add .`",
+        "`git diff --cached --name-only` lists no summary, report, or other workflow artifact",
+    )
+
+    def test_per_item_implementation_summary_is_bead_scoped_and_never_committed(
         self,
     ) -> None:
-        """gc-6svtga: do-work/implement.md and implementation-base/implement.md
-        (plus their do-work-item/implementation-item-base per-item twins)
-        required source reads/edits/tests/hashes/commits to happen inside
-        $WORKTREE but left the implementation-summary artifact write itself
-        unconstrained -- a worker wrote it to the launcher checkout instead
-        (ascent gcas-6e5qjw, 2026-08-27), which close-source-anchor correctly
-        rejected as a source-anchor mismatch, cascading a multi-step failure.
-        Root-level rollup steps (implement/summarize.md,
-        build-base/summarize-implementation.md) are deliberately excluded:
-        their job is to aggregate potentially-multiple items' summaries into
-        a single root-level artifact, so a launcher/artifact_root-side write
-        is correct for those, not a bug.
+        """gc-9949w: the per-item implement prompts said to write the summary
+        "inside `$WORKTREE`" without naming a path, so workers wrote
+        `<bead>-implementation-summary.md` at the worktree root (which
+        `git add -A` committed: 14 sidecars on ascent main) or overwrote one
+        shared `.gc-artifacts/implementation-summary.md` (gcas-j201cw). The
+        summary now goes to the bead-scoped `{{artifact_root}}` path that
+        close-source-anchor already targets, and commits carry only the change.
+        Checked in all four prompts (gc-6svtga's scope) and in what the three
+        build-* formulas actually render through their drains.
         """
         root = pathlib.Path(__file__).resolve().parents[1]
         for relative_path in (
@@ -2573,23 +2588,26 @@ class FormulaAssetTests(unittest.TestCase):
             "assets/workflows/implementation-base/implement.md",
             "assets/workflows/implementation-item-base/implement-item.md",
         ):
-            text = (root / relative_path).read_text(encoding="utf-8")
-            # Normalize whitespace before matching: this prose wraps at each
-            # file's own pre-existing column width, so the exact newline
-            # position within the sentence differs per file (confirmed by
-            # this test itself failing on an un-normalized exact-substring
-            # check, on a different word boundary in each of the four
-            # files) -- collapsing runs of whitespace to a single space
-            # matches the sentence's actual content regardless of wrap
-            # point, rather than guessing at a wrap-safe fragment boundary.
-            normalized = " ".join(text.split())
-            with self.subTest(asset=relative_path):
-                self.assertIn(
-                    "Write this artifact inside `$WORKTREE`, never the launcher checkout",
-                    normalized,
-                )
-            with self.subTest(asset=relative_path, fragment="gc-6svtga"):
-                self.assertIn("gc-6svtga", normalized)
+            # Prose wraps at each file's own width; match on whitespace-normalized text.
+            normalized = " ".join((root / relative_path).read_text(encoding="utf-8").split())
+            for fragment in self.SUMMARY_PATH_FRAGMENTS:
+                with self.subTest(asset=relative_path, fragment=fragment):
+                    self.assertIn(fragment, normalized)
+            with self.subTest(asset=relative_path, fragment="no unnamed $WORKTREE write"):
+                self.assertNotIn("Write this artifact inside `$WORKTREE`", normalized)
+        for formula in self.R13_BUILD_FORMULAS:
+            for step, drained_step in (("implement", "implement"), ("implement-same-session", "implement-item")):
+                normalized = " ".join(drained_step_text(root, formula, step, drained_step).split())
+                for fragment in self.SUMMARY_PATH_FRAGMENTS:
+                    with self.subTest(formula=formula, step=step, fragment=fragment):
+                        self.assertIn(fragment, normalized)
+        # The implement step and close-source-anchor must name one destination,
+        # and close-source-anchor must keep an already-durable path as-is.
+        close = " ".join(
+            (root / "assets/workflows/do-work/close-source-anchor.md").read_text(encoding="utf-8").split()
+        )
+        self.assertIn("`{{artifact_root}}/task-<source-anchor-id>-summary.md`", close)
+        self.assertIn("If the current evidence path is already outside any worktree", close)
 
     def test_build_basic_review_context_is_worktree_anchored(self) -> None:
         root = pathlib.Path(__file__).resolve().parents[1]
