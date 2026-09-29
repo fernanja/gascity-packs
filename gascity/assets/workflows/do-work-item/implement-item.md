@@ -22,6 +22,19 @@ rig root's checked-out branch to make validation pass locally. The only path
 from a worktree to `main` is a GitHub PR through the pack's normal publish
 step; nothing before that step may write to `main` directly, for any reason.
 
+This step must not open a GitHub pull request itself, draft or otherwise —
+only push the implementation branch to the remote so downstream review,
+repair-review, and the publish step (or CI) can see it. Opening a PR here,
+even in draft, gives it a head branch and a mergeable state before review or
+repair-review has run; an unrelated automated merge sweep that merges any
+clean non-draft PR does not know this workflow is still mid-review and can
+squash-merge unreviewed work the moment CI goes green (confirmed incident,
+gc-5gm0d: a shared-drain item worker opened fernanja/ascent_app#2459 while
+build-from-plan's implement/review/repair-review/publish steps were all
+still open, and it was only kept unmerged because a human manually converted
+it to draft). PR creation and readiness belong exclusively to the publish
+step, after review and repair-review approve.
+
 Write or update the item summary with these schema-required body sections,
 using the exact `##` headings below in this order:
 

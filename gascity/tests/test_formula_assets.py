@@ -810,6 +810,30 @@ class FormulaAssetTests(unittest.TestCase):
             with self.subTest(agent=agent_name):
                 self.assertEqual(prompt.read_text(encoding="utf-8"), f"{include}\n")
 
+    def test_shared_claim_protocol_documents_failure_class_vocabulary(self) -> None:
+        # gc-32cmg: only the literal values "hard" (or unset) and
+        # "transient" are dispatcher-recognized (internal/dispatch/retry.go
+        # classifyRetryAttempt); any other string a worker writes for a
+        # structural, retry-proof blocker (e.g. "structural",
+        # "blocked-prerequisite") falls through to the "malformed
+        # contract" default and gets silently retried anyway, burning the
+        # attempt budget re-deriving the same diagnosis (confirmed
+        # incidents: formula-flow ff-m03/ff-vwis/ff-vw0p and ascent
+        # gcas-unwt4b/gcas-lsbmw1/gcas-2j2m99). Workers must be told the
+        # exact recognized vocabulary, not left to guess.
+        root = pathlib.Path(__file__).resolve().parents[1]
+        fragment = root / "fragments" / "template-fragments" / "gc-role-worker.template.md"
+        text = fragment.read_text(encoding="utf-8")
+        for required in (
+            "dispatcher-recognized values",
+            "`hard` (or leaving the field unset/empty)",
+            "`transient` — retryable",
+            "not recognized vocabulary",
+            "the literal value must be `hard`",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, text)
+
     def test_city_claim_command_verifies_and_normalizes_claim(self) -> None:
         root = pathlib.Path(__file__).resolve().parents[1]
         command = root / "commands" / "claim" / "run.sh"
@@ -1868,6 +1892,47 @@ class FormulaAssetTests(unittest.TestCase):
         ):
             with self.subTest(fragment=fragment):
                 self.assertIn(fragment, text)
+
+    def test_repair_review_terminal_state_follows_final_verdict(self) -> None:
+        # gc-jxl5x: workflow root gcas-gigyfp closed gc.outcome=fail /
+        # gc.failure_class=review_repair_blocked even though its own final
+        # re-review artifact read verdict=approved with 0 unresolved
+        # findings (the work had already merged as PR #2412). The repair
+        # loop must derive its terminal state from the LAST re-review
+        # artifact's own verdict, not from whether the attempt counter
+        # reached max_iterations, and finalize must independently re-check
+        # that artifact before trusting a failing repair_status.
+        root = pathlib.Path(__file__).resolve().parents[1]
+        text = effective_formula_text(root, "build-from-review-base")
+        for fragment in (
+            "determined by re-reading",
+            "MOST RECENT re-review artifact's own verdict",
+            "attempt counter reached max_iterations",
+            "also refresh `gc.build.review_verdict`",
+            "gc.failure_class=review_repair_exhausted",
+            "`review_repair_blocked` means a prerequisite\nwas missing, nothing else",
+            "independently re-open the",
+            "gc.failure_class=repair_status_contradicts_review",
+        ):
+            with self.subTest(fragment=fragment):
+                self.assertIn(fragment, text)
+
+    def test_shared_drain_item_step_never_opens_pr(self) -> None:
+        # gc-5gm0d: a shared-drain implementation worker opened
+        # fernanja/ascent_app#2459 while build-from-plan's own
+        # implement/review/repair-review/publish steps were all still
+        # open; an automated merge sweep could have squash-merged it the
+        # moment CI went green. PR creation belongs exclusively to the
+        # publish step, never the single-item implementation step.
+        root = pathlib.Path(__file__).resolve().parents[1]
+        for formula in ("implementation-item-base", "do-work-item"):
+            with self.subTest(formula=formula):
+                text = effective_formula_text(root, formula)
+                self.assertIn(
+                    "This step must not open a GitHub pull request itself, draft or otherwise",
+                    text,
+                )
+                self.assertIn("belong exclusively to the publish", text)
 
     def test_preflight_review_instruction_stays_synchronized(self) -> None:
         # build-base and build-from-review-base are separate root formulas

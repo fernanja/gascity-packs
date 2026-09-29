@@ -55,6 +55,27 @@ Honor bead's requested `gc.outcome` metadata. If no failure contract exists,
 record unrecoverable failure as `gc.outcome=fail` plus concise
 `gc.failure_class` and reason.
 
+`gc.failure_class` has exactly two dispatcher-recognized values, and the
+choice controls whether the attempt budget gets spent again on your same
+diagnosis:
+
+- `hard` (or leaving the field unset/empty) — terminal. The dispatcher
+  stops retrying immediately. Use this for a structural, retry-proof
+  blocker: a superseded or misdispatched workflow root, an unmet upstream
+  dependency, work that depends on something not yet merged, a design
+  decision only a human can make. If your own diagnosis says "a retry will
+  reach the identical conclusion," that is `hard`, not any other word.
+- `transient` — retryable. The dispatcher spawns another attempt.
+
+Any other string (`structural`, `blocked-prerequisite`, `permanent`, or
+anything else that reads like a reasonable English description of a hard
+blocker) is not recognized vocabulary: the dispatcher treats it as a
+malformed result contract and retries anyway, silently burning the rest of
+the attempt budget on a diagnosis you already made (confirmed pattern,
+gc-32cmg: three sequential attempts producing the identical structural
+diagnosis before the budget ran out, in two unrelated rigs). If you mean
+"do not retry this," the literal value must be `hard`.
+
 `gc bd close` also enforces a separate, warn-only work-record gate: set
 `gc.work_outcome` to one of `shipped|no-op|blocked|abandoned`, and when it is
 `shipped`, also set `gc.work_commit` to the commit sha that shipped. This is
