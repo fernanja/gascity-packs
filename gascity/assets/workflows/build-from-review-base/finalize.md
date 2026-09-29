@@ -45,6 +45,10 @@ as a false failure in gc-jxl5x: workflow root gcas-gigyfp).
 
 Record terminal outcome metadata on the workflow root before closing so the
 publish step can safely no-op, push, open a PR, or block with an explicit
-reason without changing the workflow outcome.
+reason without changing the workflow outcome. Do not blank, reset, or
+otherwise touch `gc.build.review_subject_commit` -- the publish step trusts
+it as the sole source of the approved commit (gc-ajt3i) and it must still
+hold whatever value review/repair-review last recorded against the approving
+verdict.
 
 Artifact validation: this stage is gated by `.gc/scripts/checks/build-artifact-valid.sh`, which validates the artifact recorded at `gc.build.final_report_path` against schema `gc.build.final-report.v1`. On repair attempts (`gc.attempt` greater than 1), read the validator errors from `gc.attempt_log` on the validation loop control bead (the dependent of this step bead) and repair the artifact in place instead of rewriting it. Two bounded repair attempts follow the first failure; exhausting them closes this stage with `gc.outcome=fail` and machine-readable validation errors that block downstream stages. Never ask questions in headless mode; record unresolved ambiguity inside the artifact.

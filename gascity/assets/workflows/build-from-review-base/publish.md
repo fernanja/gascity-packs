@@ -27,3 +27,40 @@ If publishing is authorized, publish only after the continuation finalized
 successfully and the review stage approved or explicitly allowed publication.
 Record push status, PR status, or a blocked publish reason on the workflow root
 and publish step before closing.
+
+**Resolving the approved commit and deciding whether to push (gc-ajt3i).**
+Never decide "already pushed" from local push/PR metadata carried over from
+an earlier run or continuation, and never assume the branch is already at the
+right commit without checking. Follow this protocol exactly:
+
+1. Read `gc.build.review_subject_commit` on the workflow root. This is the
+   ONLY source of truth for the approved commit -- it is the sha the review
+   or repair-review stage most recently recorded against an `approved`
+   verdict. If it is missing, fail closed (`gc.outcome=fail`,
+   `gc.failure_class=hard`, reason `missing review_subject_commit`) rather
+   than guessing from `implementation_summary_path` or any other artifact.
+2. Resolve the actual remote state with `git ls-remote origin <branch>` --
+   not a locally cached ref, not a "was pushed" flag from a previous
+   publish attempt. Compare its commit to `gc.build.review_subject_commit`.
+3. If they already match, no push is needed; proceed straight to PR handling
+   (if `open_pr` is authorized).
+4. If they differ, fast-forward push `gc.build.review_subject_commit` to
+   `<branch>` on `origin`. If the push cannot be fast-forwarded (rejected,
+   diverged, or the local worktree doesn't have that commit), fail loudly:
+   do NOT open a PR, do NOT report `not_published`/`noop`, record
+   `gc.outcome=fail`, `gc.failure_class=hard`, and a reason naming both the
+   approved sha and the actual remote sha. A stale-head PR pointing at the
+   wrong commit is worse than a blocked publish step.
+5. Only after the remote branch tip is confirmed to equal
+   `gc.build.review_subject_commit` (whether by matching already or by a
+   push that just succeeded) may a PR be opened. Record the sha that is now
+   actually at the branch tip as `gc.build.publish_pushed_commit` on the
+   workflow root before closing -- this is the sha a PR title/body may
+   truthfully claim as published.
+
+This is exactly the gap that shipped fernanja/ascent_app#2462 on continuation
+root gcas-p0g3rr: the publish step reported "branch was already pushed at
+approved commit 00c89571d" -- the previous blocked run's pre-repair head --
+while the real approved commit (88bc1992f, three repair commits later) was
+never pushed. The remote was never actually checked against the latest
+approving review's own subject commit.

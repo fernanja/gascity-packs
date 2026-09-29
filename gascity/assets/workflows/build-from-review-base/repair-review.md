@@ -51,14 +51,21 @@ you are about to cite and confirm its own status/verdict field actually
 supports that outcome.
 
 Record every attempt on the workflow root metadata and in artifacts. Every
-time you write `gc.build.repair_status`, also refresh `gc.build.review_verdict`
-and `gc.build.review_report_path` on the workflow root to the MOST RECENT
-review/re-review artifact's own verdict and path — never leave the original
-(pre-repair) review step's verdict in place once a repair loop has run;
-finalize and any human auditor read `gc.build.review_verdict` directly and
-will trust a stale value over the true latest artifact. On approval, record
-`gc.build.repair_status=approved`, `gc.build.review_verdict=approved`, and the
-final review report path. On a genuine exhausted-without-approval ceiling,
+time you write `gc.build.repair_status`, also refresh `gc.build.review_verdict`,
+`gc.build.review_report_path`, and `gc.build.review_subject_commit` on the
+workflow root to the MOST RECENT review/re-review artifact's own verdict,
+path, and reviewed commit — never leave the original (pre-repair) review
+step's verdict, path, or commit in place once a repair loop has run;
+finalize and the publish step both read these directly and will trust a
+stale value over the true latest artifact. `gc.build.review_subject_commit`
+must be resolved fresh from `git rev-parse HEAD` in the worktree that the
+MOST RECENT approving re-review actually reviewed, at the moment you record
+it — never carried forward from an earlier attempt or an unrelated
+continuation (gc-ajt3i: a publish step opened a PR 3 approved commits behind
+because this value was never refreshed after a repair loop). On approval,
+record `gc.build.repair_status=approved`, `gc.build.review_verdict=approved`,
+the final review report path, and the final reviewed commit sha as
+`gc.build.review_subject_commit`. On a genuine exhausted-without-approval ceiling,
 record `gc.build.repair_status=exhausted`, `gc.outcome=fail`,
 `gc.failure_class=review_repair_exhausted` — reserve `review_repair_failed`
 for a repair or review invocation that itself returned an error, and never use

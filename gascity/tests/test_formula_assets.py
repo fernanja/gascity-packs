@@ -1917,6 +1917,33 @@ class FormulaAssetTests(unittest.TestCase):
             with self.subTest(fragment=fragment):
                 self.assertIn(fragment, text)
 
+    def test_publish_resolves_approved_commit_from_latest_review_only(self) -> None:
+        # gc-ajt3i: continuation root gcas-p0g3rr's publish step closed with
+        # "branch was already pushed at approved commit 00c89571d" -- the
+        # PREVIOUS blocked run's pre-repair head -- while the real approved
+        # commit from the final re-review (88bc1992f, three repair commits
+        # later) was never pushed. PR #2462 opened on unreviewed-stale code.
+        # The review/repair-review stages must record a single canonical
+        # `gc.build.review_subject_commit` fresh at approval time, finalize
+        # must not disturb it, and publish must resolve the approved commit
+        # from it alone, checked against the actual remote ref -- never from
+        # carried-over publish/implementation-summary metadata.
+        root = pathlib.Path(__file__).resolve().parents[1]
+        text = effective_formula_text(root, "build-from-review-base")
+        for fragment in (
+            "record `gc.build.review_subject_commit`",
+            "resolved fresh right now from the actual reviewed\nworktree's `git rev-parse HEAD`",
+            "never copied from `implementation_summary_path`",
+            "also refresh `gc.build.review_verdict`,\n`gc.build.review_report_path`, and `gc.build.review_subject_commit`",
+            "Do not blank, reset, or\notherwise touch `gc.build.review_subject_commit`",
+            "Read `gc.build.review_subject_commit` on the workflow root. This is the\n   ONLY source of truth for the approved commit",
+            "git ls-remote origin",
+            "fast-forward push `gc.build.review_subject_commit` to",
+            "gc.build.publish_pushed_commit",
+        ):
+            with self.subTest(fragment=fragment):
+                self.assertIn(fragment, text)
+
     def test_shared_drain_item_step_never_opens_pr(self) -> None:
         # gc-5gm0d: a shared-drain implementation worker opened
         # fernanja/ascent_app#2459 while build-from-plan's own

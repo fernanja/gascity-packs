@@ -40,4 +40,12 @@ Close this step only when the implementation has a concrete review verdict:
 verdict, unresolved findings, drift observations, and any existing fix-attempt
 count on the workflow root metadata.
 
+When the verdict is `approved`, also record `gc.build.review_subject_commit`
+on the workflow root, resolved fresh right now from the actual reviewed
+worktree's `git rev-parse HEAD` — never copied from `implementation_summary_path`,
+an earlier continuation's publish metadata, or any other prior run's value.
+This is the only sha the publish step is allowed to treat as approved for
+push/PR purposes (gc-ajt3i: a publish step trusted a stale pre-repair commit
+here and opened a PR 3 approved commits behind).
+
 Artifact validation: this stage is gated by `.gc/scripts/checks/build-artifact-valid.sh`, which validates the artifact recorded at `gc.build.review_report_path` against schema `gc.build.review.v1`. On repair attempts (`gc.attempt` greater than 1), read the validator errors from `gc.attempt_log` on the validation loop control bead (the dependent of this step bead) and repair the artifact in place instead of rewriting it. Two bounded repair attempts follow the first failure; exhausting them closes this stage with `gc.outcome=fail` and machine-readable validation errors that block downstream stages. Never ask questions in headless mode; record unresolved ambiguity inside the artifact.
