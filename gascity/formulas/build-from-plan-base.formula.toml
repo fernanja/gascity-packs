@@ -43,7 +43,7 @@ description_file = "../assets/workflows/build-from-plan-base/prepare-plan.md"
 id = "plan"
 title = "Produce implementation plan"
 needs = ["prepare-plan"]
-metadata = { "gc.run_target" = "gc.design-author", "gc.build.artifact_schema" = "gc.build.plan.v1", "gc.build.artifact_path_keys" = "gc.build.plan_path,gc.var.plan_path" }
+metadata = { "gc.run_target" = "gc.design-author", "gc.build.artifact_schema" = "gc.build.plan.v1", "gc.build.artifact_path_keys" = "gc.build.plan_path,gc.var.plan_path", "gc.build.coverage_permits" = "required" }
 description_file = "../assets/workflows/build-from-plan-base/plan.md"
 
 [steps.check]

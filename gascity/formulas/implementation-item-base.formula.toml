@@ -26,7 +26,7 @@ default = "gc.implementation-worker"
 [[steps]]
 id = "implement-item"
 title = "Implement shared-drain item"
-metadata = { "gc.run_target" = "{{implementation_target}}", "gc.build.artifact_schema" = "gc.build.implementation-summary.v1", "gc.build.artifact_path_keys" = "gc.implementation.summary_path,gc.build.implementation_summary_path,gc.var.summary_path" }
+metadata = { "gc.run_target" = "{{implementation_target}}", "gc.build.artifact_schema" = "gc.build.implementation-summary.v1", "gc.build.artifact_path_keys" = "gc.implementation.summary_path,gc.build.implementation_summary_path,gc.var.summary_path", "gc.build.coverage_permits" = "required" }
 description_file = "../assets/workflows/implementation-item-base/implement-item.md"
 
 [steps.check]

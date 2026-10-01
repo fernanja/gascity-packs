@@ -429,6 +429,218 @@ trace:
             self.assertNotIn("Traceback", stderr.getvalue())
 
 
+class CoveragePermitTests(unittest.TestCase):
+    """gc-gdyaz: a requirement may be left uncovered only with a permit that
+    quotes the requirements artifact."""
+
+    REQUIREMENTS = (
+        "# Requirements\n\n"
+        "## Acceptance Criteria\n\n"
+        "- **AC-1:** the new guard rejects a team-less item.\n"
+        "- **AC-2:** `make preflight-fast` exits 0 and the pull request's\n"
+        "  checks are green.\n"
+        "- **AC-3:** after merge, the Dependabot alerts for these packages auto-close.\n"
+        "  The mayor checks this *post-merge*; it is not a worker AC.\n\n"
+        "## Out Of Scope\n\n"
+        "> Repairing production rows is Jon\u2019s decision \u2014 the database is\n"
+        "> never edited directly.\n"
+    )
+    PERMIT_AC3 = "The mayor checks this post-merge; it is not a worker AC."
+    SECTIONS = {
+        "gc.build.plan.v1": ["Summary", "Current System", "Proposed Implementation", "Non-Goals", "Verification"],
+        "gc.build.implementation-summary.v1": [
+            "Summary",
+            "Intended Behavior",
+            "Changed Files",
+            "Verification",
+            "Remaining Risks",
+        ],
+    }
+
+    def artifact(
+        self,
+        schema: str = "gc.build.plan.v1",
+        *,
+        ac3_status: str = "out_of_scope",
+        permit: str | None = None,
+        status: str = "approved",
+        extra_entry: str = "",
+        extra_row: str = "",
+    ) -> str:
+        permit_line = f"      permit: {json.dumps(permit)}\n" if permit is not None else ""
+        rationale_line = "      rationale: Checked by the mayor after merge.\n" if ac3_status != "covered" else ""
+        body = "\n\n".join(
+            f"## {section}\n\n{section} content."
+            + (
+                "\n\n| ID | Status |\n| --- | --- |\n| AC-1 | covered |\n| AC-2 | covered |\n"
+                f"| AC-3 | {ac3_status} |{extra_row}"
+                if section == "Summary"
+                else ""
+            )
+            for section in self.SECTIONS[schema]
+        )
+        return (
+            "---\n"
+            f"schema: {schema}\n"
+            "workflow:\n  id: gcas-root\n  formula: build-from-plan\n"
+            "methodology:\n  pack: gascity\n  name: build-from-plan\n"
+            "producer:\n  formula: build-from-plan\n  stage: plan\n  attempt: 1\n"
+            f"status: {status}\n"
+            "trace:\n"
+            "  upstream:\n"
+            "    - path: requirements.md\n"
+            "      hash: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+            "      ids: [AC-1, AC-2, AC-3]\n"
+            "  coverage:\n"
+            "    - id: AC-1\n      status: covered\n"
+            "    - id: AC-2\n      status: covered\n"
+            f"    - id: AC-3\n      status: {ac3_status}\n"
+            f"{rationale_line}{permit_line}{extra_entry}"
+            "---\n\n"
+            f"{body}\n"
+        )
+
+    def validate(self, text: str, schema: str = "gc.build.plan.v1", requirements: str | None = None):
+        sources = [("requirements.md", self.REQUIREMENTS if requirements is None else requirements)]
+        return build_artifact_validator.validate_artifact_text(
+            text,
+            expected_schema=schema,
+            require_coverage_permits=True,
+            requirements_sources=sources,
+        )
+
+    def test_uncovered_requirement_with_quoted_permit_is_accepted_for_plan_and_summary(self) -> None:
+        for schema in self.SECTIONS:
+            for status in ("out_of_scope", "deferred", "blocked", "not_applicable", "superseded"):
+                with self.subTest(schema=schema, status=status):
+                    artifact = self.validate(self.artifact(schema, ac3_status=status, permit=self.PERMIT_AC3), schema)
+                    self.assertEqual(artifact.coverage[2]["permit"], self.PERMIT_AC3)
+
+    def test_fully_covered_artifact_needs_no_permit(self) -> None:
+        for schema in self.SECTIONS:
+            with self.subTest(schema=schema):
+                self.validate(self.artifact(schema, ac3_status="covered"), schema)
+
+    def test_uncovered_requirement_without_permit_is_rejected_and_named(self) -> None:
+        for schema in self.SECTIONS:
+            for status in ("deferred", "blocked", "out_of_scope", "not_applicable", "superseded"):
+                with self.subTest(schema=schema, status=status):
+                    with self.assertRaises(build_artifact_validator.ValidationError) as caught:
+                        self.validate(self.artifact(schema, ac3_status=status), schema)
+                    message = str(caught.exception)
+                    self.assertIn("trace.coverage[AC-3]", message)
+                    self.assertIn(f"status '{status}'", message)
+                    self.assertIn("missing permit", message)
+                    self.assertIn("status: blocked", message)
+
+    def test_permit_must_quote_text_that_is_in_the_requirements(self) -> None:
+        invented = "AC-3 can wait until the publish stage has opened the pull request."
+        with self.assertRaises(build_artifact_validator.ValidationError) as caught:
+            self.validate(self.artifact(ac3_status="deferred", permit=invented))
+        message = str(caught.exception)
+        self.assertIn("trace.coverage[AC-3]", message)
+        self.assertIn("permit text is not in the requirements artifact (requirements.md)", message)
+        self.assertIn(invented, message)
+
+    def test_permit_match_ignores_wrapping_emphasis_and_typographic_marks(self) -> None:
+        # The requirements wrap the sentence, emphasise a word and use a curly
+        # apostrophe, an em dash and blockquote markers; the quote has none.
+        for permit in (
+            "The mayor checks this post-merge;   it is not a\n worker AC.",
+            "Repairing production rows is Jon's decision - the database is never edited directly.",
+            "`make preflight-fast` exits 0 and the pull request's checks are green.",
+        ):
+            with self.subTest(permit=permit):
+                self.validate(self.artifact(ac3_status="deferred", permit=permit))
+
+    def test_permit_too_short_or_not_a_string_is_rejected(self) -> None:
+        with self.assertRaisesRegex(build_artifact_validator.ValidationError, r"permit is 12 characters; quote at least 20"):
+            self.validate(self.artifact(ac3_status="deferred", permit="Out Of Scope"))
+        not_a_string = self.artifact(ac3_status="deferred").replace(
+            "      rationale: Checked by the mayor after merge.\n",
+            "      rationale: Checked by the mayor after merge.\n      permit: [requirements.md]\n",
+        )
+        with self.assertRaisesRegex(build_artifact_validator.ValidationError, r"AC-3.*permit must be a string"):
+            self.validate(not_a_string)
+
+    def test_every_unpermitted_entry_is_reported_in_one_error(self) -> None:
+        text = self.artifact(
+            ac3_status="deferred",
+            extra_entry=(
+                "    - id: OQ-1\n      status: deferred\n      rationale: Screenshots were not taken this session.\n"
+            ),
+            extra_row="\n| OQ-1 | deferred |",
+        )
+        with self.assertRaises(build_artifact_validator.ValidationError) as caught:
+            self.validate(text)
+        message = str(caught.exception)
+        self.assertIn("trace.coverage[AC-3]", message)
+        self.assertIn("trace.coverage[OQ-1]", message)
+
+    def test_artifact_that_is_not_approved_needs_no_permits(self) -> None:
+        for status in ("blocked", "superseded"):
+            with self.subTest(status=status):
+                self.validate(
+                    self.artifact("gc.build.implementation-summary.v1", ac3_status="blocked", status=status),
+                    "gc.build.implementation-summary.v1",
+                )
+        for status in ("blocked", "questions", "changes_required", "superseded"):
+            with self.subTest(status=status):
+                self.validate(self.artifact(ac3_status="deferred", status=status))
+        # A draft is still on its way to approval, so it is held to the rule.
+        with self.assertRaisesRegex(build_artifact_validator.ValidationError, "missing permit"):
+            self.validate(self.artifact(ac3_status="deferred", status="draft"))
+
+    def test_permit_cannot_be_checked_without_a_requirements_artifact(self) -> None:
+        with self.assertRaisesRegex(build_artifact_validator.ValidationError, "no requirements artifact was supplied"):
+            build_artifact_validator.validate_artifact_text(
+                self.artifact(ac3_status="deferred", permit=self.PERMIT_AC3),
+                expected_schema="gc.build.plan.v1",
+                require_coverage_permits=True,
+                requirements_sources=[],
+            )
+
+    def test_permit_rule_is_off_unless_the_stage_opts_in(self) -> None:
+        artifact = build_artifact_validator.validate_artifact_text(
+            self.artifact(ac3_status="deferred"), expected_schema="gc.build.plan.v1"
+        )
+        self.assertEqual(artifact.coverage[2]["status"], "deferred")
+
+    def test_listed_requirement_ids_still_need_a_coverage_entry(self) -> None:
+        text = self.artifact(ac3_status="covered").replace("ids: [AC-1, AC-2, AC-3]", "ids: [AC-1, AC-2, AC-3, AC-4]")
+        with self.assertRaisesRegex(build_artifact_validator.ValidationError, r"missing: \['AC-4'\]"):
+            self.validate(text)
+
+    def test_cli_checks_permits_against_the_given_requirements_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            requirements = root / "requirements.md"
+            requirements.write_text(self.REQUIREMENTS, encoding="utf-8")
+            plan = root / "implementation-plan.md"
+            base = ["--schema", "gc.build.plan.v1", "--path", str(plan)]
+            permits = base + ["--require-coverage-permits", "--requirements", str(requirements)]
+
+            plan.write_text(self.artifact(ac3_status="deferred"), encoding="utf-8")
+            stderr = io.StringIO()
+            with redirect_stderr(stderr), redirect_stdout(io.StringIO()):
+                self.assertEqual(build_artifact_validator.main(base), 0)
+                self.assertEqual(build_artifact_validator.main(permits), 1)
+            self.assertIn("trace.coverage[AC-3]", stderr.getvalue())
+            self.assertNotIn("Traceback", stderr.getvalue())
+
+            plan.write_text(self.artifact(ac3_status="deferred", permit=self.PERMIT_AC3), encoding="utf-8")
+            with redirect_stderr(io.StringIO()), redirect_stdout(io.StringIO()):
+                self.assertEqual(build_artifact_validator.main(permits), 0)
+
+            stderr = io.StringIO()
+            with redirect_stderr(stderr), redirect_stdout(io.StringIO()):
+                code = build_artifact_validator.main(
+                    base + ["--require-coverage-permits", "--requirements", str(root / "missing.md")]
+                )
+            self.assertEqual(code, 1)
+            self.assertIn("cannot be read", stderr.getvalue())
+
+
 class VerdictReportValidatorTests(unittest.TestCase):
     def test_verdict_report_accepts_pass_and_fail_reports(self) -> None:
         pass_report = """---

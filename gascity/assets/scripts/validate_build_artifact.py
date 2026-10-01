@@ -33,6 +33,30 @@ PACK_NAME_RE = re.compile(r'^\[pack\][^\[]*?^name\s*=\s*"([^"]*)"', re.MULTILINE
 INSTALLED_PACK_LOOKUP_TIMEOUT_SECONDS = 60
 FORBIDDEN_REQUIRED_FIELD_NAMES = {"owner", "stage-owner", "stage_owner", "persona", "role"}
 
+# Coverage permits (gc-gdyaz). A producer stage that opts in (step metadata
+# gc.build.coverage_permits=required, passed here as --require-coverage-permits)
+# may not leave a requirement at any status other than "covered" unless the
+# coverage entry carries a `permit`: a word-for-word quote of the requirements
+# text that allows it. An artifact whose own status already says the work is
+# not approved needs no permits: it stops the build by itself.
+PERMIT_EXEMPT_ARTIFACT_STATUSES = frozenset({"blocked", "questions", "changes_required", "superseded"})
+MIN_PERMIT_CHARS = 20
+PERMIT_FOLD_TABLE = str.maketrans(
+    {
+        "\u2018": "'",
+        "\u2019": "'",
+        "\u201c": '"',
+        "\u201d": '"',
+        "\u2010": "-",
+        "\u2011": "-",
+        "\u2013": "-",
+        "\u2014": "-",
+        "\u00a0": " ",
+    }
+)
+PERMIT_BLOCKQUOTE_RE = re.compile(r"(?m)^[ \t]*>+[ \t]?")
+PERMIT_MARKDOWN_NOISE_RE = re.compile(r"[`*]")
+
 
 class ValidationError(Exception):
     pass
@@ -51,7 +75,19 @@ class BuildArtifact:
     coverage: list[dict[str, Any]]
 
 
-def validate_artifact_text(text: str, *, expected_schema: str = "") -> BuildArtifact:
+def validate_artifact_text(
+    text: str,
+    *,
+    expected_schema: str = "",
+    require_coverage_permits: bool = False,
+    requirements_sources: list[tuple[str, str]] | None = None,
+) -> BuildArtifact:
+    """Validate one build artifact.
+
+    require_coverage_permits turns on the permit rule for this artifact;
+    requirements_sources is the (label, text) list a permit may quote from. The
+    caller supplies it: an artifact never names its own permit source.
+    """
     schema_id, front_matter, body = parse_front_matter(text)
     if expected_schema and schema_id != expected_schema:
         raise ValidationError(f"schema must be {expected_schema!r}, got {schema_id!r}")
@@ -63,6 +99,8 @@ def validate_artifact_text(text: str, *, expected_schema: str = "") -> BuildArti
     upstream = validate_upstream(trace)
     coverage = validate_coverage(trace, schema)
     validate_coverage_completeness(upstream, coverage)
+    if require_coverage_permits:
+        validate_coverage_permits(front_matter, coverage, requirements_sources or [])
     validate_markdown_coverage(body, coverage)
     validate_required_sections(body, schema)
     return BuildArtifact(
@@ -313,6 +351,78 @@ def validate_coverage(trace: dict[str, Any], schema: dict[str, Any]) -> list[dic
     return coverage
 
 
+def normalize_permit_text(text: str) -> str:
+    """Fold layout so a quote survives re-wrapping: whitespace runs, blockquote
+    markers, Markdown emphasis/code marks, and typographic quotes and dashes."""
+    text = text.translate(PERMIT_FOLD_TABLE)
+    text = PERMIT_BLOCKQUOTE_RE.sub("", text)
+    text = PERMIT_MARKDOWN_NOISE_RE.sub("", text)
+    return " ".join(text.split())
+
+
+def validate_coverage_permits(
+    front_matter: dict[str, Any],
+    coverage: list[dict[str, Any]],
+    requirements_sources: list[tuple[str, str]],
+) -> None:
+    status = str(front_matter.get("status", "")).strip()
+    if status in PERMIT_EXEMPT_ARTIFACT_STATUSES:
+        return
+    open_entries = [entry for entry in coverage if str(entry["status"]) != "covered"]
+    if not open_entries:
+        return
+
+    labels = [label for label, _ in requirements_sources]
+    haystacks = [normalize_permit_text(text) for _, text in requirements_sources]
+    problems: list[str] = []
+    for entry in open_entries:
+        item_id = str(entry["id"])
+        entry_status = str(entry["status"])
+        where = f"trace.coverage[{item_id}] (status {entry_status!r})"
+        permit = entry.get("permit")
+        if permit is None or (isinstance(permit, str) and not permit.strip()):
+            problems.append(
+                f"{where}: missing permit. Add `permit: \"<the sentence in the requirements artifact that allows this, quoted word for word>\"`"
+            )
+            continue
+        if not isinstance(permit, str):
+            problems.append(f"{where}: permit must be a string quoting the requirements artifact")
+            continue
+        needle = normalize_permit_text(permit)
+        if len(needle) < MIN_PERMIT_CHARS:
+            problems.append(
+                f"{where}: permit is {len(needle)} characters; quote at least {MIN_PERMIT_CHARS} characters of the requirements text that allows this"
+            )
+            continue
+        if not haystacks:
+            problems.append(
+                f"{where}: no requirements artifact was supplied to check the permit against (the workflow root must record gc.build.requirements_path or gc.var.requirements_path)"
+            )
+            continue
+        if not any(needle in haystack for haystack in haystacks):
+            shown = needle if len(needle) <= 120 else needle[:117] + "..."
+            problems.append(
+                f"{where}: permit text is not in the requirements artifact ({', '.join(labels)}): \"{shown}\". Quote the requirements word for word"
+            )
+    if problems:
+        raise ValidationError(
+            "coverage permits: a requirement may be left at a status other than 'covered' only when the requirements artifact itself allows it. "
+            "For each entry below either do the work and mark it 'covered', quote the permitting requirements text in `permit`, "
+            "or set the artifact `status: blocked` and stop for a decision.\n- "
+            + "\n- ".join(problems)
+        )
+
+
+def read_requirements_sources(paths: list[Path]) -> list[tuple[str, str]]:
+    sources: list[tuple[str, str]] = []
+    for path in paths:
+        try:
+            sources.append((str(path), path.read_text(encoding="utf-8")))
+        except (OSError, UnicodeDecodeError) as exc:
+            raise ValidationError(f"requirements artifact {path} cannot be read: {exc}") from exc
+    return sources
+
+
 def validate_markdown_coverage(body: str, coverage: list[dict[str, Any]]) -> None:
     expected = {str(item["id"]): str(item["status"]) for item in coverage}
     if not expected:
@@ -403,13 +513,31 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Validate a gc build artifact")
     parser.add_argument("--schema", required=True, help="Expected schema id")
     parser.add_argument("--path", required=True, type=Path, help="Artifact markdown path")
+    parser.add_argument(
+        "--require-coverage-permits",
+        action="store_true",
+        help="Reject coverage entries that are not 'covered' unless they carry a permit quoting --requirements",
+    )
+    parser.add_argument(
+        "--requirements",
+        action="append",
+        default=[],
+        type=Path,
+        metavar="PATH",
+        help="Requirements artifact a permit may quote from (repeatable)",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
     try:
-        artifact = validate_artifact_text(args.path.read_text(encoding="utf-8"), expected_schema=args.schema)
+        artifact = validate_artifact_text(
+            args.path.read_text(encoding="utf-8"),
+            expected_schema=args.schema,
+            require_coverage_permits=args.require_coverage_permits,
+            requirements_sources=read_requirements_sources(args.requirements) if args.require_coverage_permits else None,
+        )
     except CLI_ERROR_TYPES as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

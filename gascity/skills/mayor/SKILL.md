@@ -69,6 +69,13 @@ Each user story should include lightweight acceptance criteria, usually 2-5
 bullets. Capture constraints discovered from the repo. Do not preselect bead
 IDs or formula targets in requirements.
 
+State hand-offs in the requirements themselves. If an acceptance criterion is
+checked after merge, by you, or by a later stage, or something is deliberately
+left out, say so in a full sentence. A plan or implementation summary may
+leave a requirement at any status other than `covered` only by quoting such a
+sentence as its `permit`; the build gate rejects every other deferral, so a
+hand-off that lives only in a source document or in your head blocks the build.
+
 When requirements forbid edits to a shared area (e.g. "no edits under
 `packages/ui`"), do not write a flat ban. Add a sanctioned exception: a minimal
 fix to wiring an earlier part delivered is allowed when an acceptance

@@ -239,6 +239,52 @@ BUILD_ARTIFACT_GATE_CHECK_OVERRIDES = {
 # One produce attempt plus two bounded schema-repair attempts per artifact stage.
 BUILD_ARTIFACT_GATE_MAX_ATTEMPTS = 3
 
+# Producer stages whose artifact may leave a requirement uncovered only with a
+# permit quoting the requirements artifact (gc-gdyaz). The switch travels as
+# step metadata so the rule and the step text that explains it install together.
+COVERAGE_PERMIT_STEPS = {
+    ("build-from-plan-base", "plan"): "build-from-plan-base/plan.md",
+    ("do-work", "implement"): "do-work/implement.md",
+    ("do-work-item", "implement-item"): "do-work-item/implement-item.md",
+    ("implementation-base", "implement"): "implementation-base/implement.md",
+    ("implementation-item-base", "implement-item"): "implementation-item-base/implement-item.md",
+}
+COVERAGE_PERMIT_REQUIREMENTS = (
+    "# Requirements\n\n"
+    "- **AC-1:** the guard rejects a team-less item.\n"
+    "- **AC-2:** after merge the alerts auto-close. The mayor checks this\n"
+    "  post-merge; it is not a worker AC.\n"
+)
+COVERAGE_PERMIT_QUOTE = "The mayor checks this post-merge; it is not a worker AC."
+
+
+def coverage_permit_plan(permit: str | None, *, status: str = "approved") -> str:
+    permit_line = f"      permit: {json.dumps(permit)}\n" if permit is not None else ""
+    sections = "\n\n".join(
+        f"## {name}\n\n{name} content."
+        for name in ("Current System", "Proposed Implementation", "Non-Goals", "Verification")
+    )
+    return (
+        "---\n"
+        "schema: gc.build.plan.v1\n"
+        "workflow:\n  id: root\n  formula: build-from-plan\n"
+        "methodology:\n  pack: gascity\n  name: build-from-plan\n"
+        "producer:\n  formula: build-from-plan\n  stage: plan\n  attempt: 1\n"
+        f"status: {status}\n"
+        "trace:\n"
+        "  upstream:\n"
+        "    - path: requirements.md\n"
+        "      hash: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+        "      ids: [AC-1, AC-2]\n"
+        "  coverage:\n"
+        "    - id: AC-1\n      status: covered\n"
+        "    - id: AC-2\n      status: deferred\n      rationale: Observable only after merge.\n"
+        f"{permit_line}"
+        "---\n\n"
+        "## Summary\n\n| ID | Status |\n| --- | --- |\n| AC-1 | covered |\n| AC-2 | deferred |\n\n"
+        f"{sections}\n"
+    )
+
 REQUIREMENTS_GATE = (
     "gc.build.requirements.v1",
     "gc.build.requirements_path,gc.var.requirements_path",
@@ -5464,6 +5510,162 @@ description = "Override sink that writes the base triage report contract."
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("no artifact path recorded", result.stderr)
         self.assertIn("gc.build.requirements_path,gc.var.requirements_path", result.stderr)
+
+    def _run_coverage_permit_check(
+        self,
+        plan_text: str,
+        *,
+        step_permits: str | None = "required",
+        root_metadata: dict[str, str] | None = None,
+        requirements_text: str | None = COVERAGE_PERMIT_REQUIREMENTS,
+        extra_beads: dict[str, str] | None = None,
+        requirements_relative_to: str = "",
+    ) -> subprocess.CompletedProcess:
+        with tempfile.TemporaryDirectory() as artifact_dir:
+            root_dir = pathlib.Path(artifact_dir)
+            plan = root_dir / "implementation-plan.md"
+            plan.write_text(plan_text, encoding="utf-8")
+            requirements = root_dir / "requirements.md"
+            if requirements_text is not None:
+                requirements.write_text(requirements_text, encoding="utf-8")
+            step_meta = {
+                "gc.root_bead_id": "root",
+                "gc.build.artifact_schema": "gc.build.plan.v1",
+                "gc.build.artifact_path_keys": "gc.build.plan_path,gc.var.plan_path",
+            }
+            if step_permits is not None:
+                step_meta["gc.build.coverage_permits"] = step_permits
+            root_meta = {"gc.build.plan_path": str(plan)}
+            if root_metadata is None:
+                root_meta["gc.var.requirements_path"] = (
+                    "requirements.md" if requirements_relative_to else str(requirements)
+                )
+            else:
+                root_meta.update(root_metadata)
+            beads = {
+                "loop": json.dumps([{"id": "loop", "metadata": step_meta}]),
+                "root": json.dumps([{"id": "root", "metadata": root_meta}]),
+                **(extra_beads or {}),
+            }
+            extra_env = {"GC_RIG_ROOT": str(root_dir)} if requirements_relative_to else None
+            return self._run_build_artifact_check(beads, "loop", extra_env=extra_env)
+
+    def test_build_artifact_check_rejects_unpermitted_deferral_when_step_requires_permits(self) -> None:
+        result = self._run_coverage_permit_check(coverage_permit_plan(None))
+
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("failed validation", result.stderr)
+        self.assertIn("trace.coverage[AC-2] (status 'deferred'): missing permit", result.stderr)
+
+    def test_build_artifact_check_accepts_permit_quoted_from_root_requirements(self) -> None:
+        for relative in ("", "rig-relative"):
+            with self.subTest(requirements_path=relative or "absolute"):
+                result = self._run_coverage_permit_check(
+                    coverage_permit_plan(COVERAGE_PERMIT_QUOTE), requirements_relative_to=relative
+                )
+
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("build artifact valid", result.stdout)
+                self.assertIn("permits=", result.stdout)
+
+    def test_build_artifact_check_rejects_permit_that_is_not_in_the_requirements(self) -> None:
+        result = self._run_coverage_permit_check(
+            coverage_permit_plan("This criterion is left for the publish stage to observe.")
+        )
+
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("trace.coverage[AC-2]", result.stderr)
+        self.assertIn("permit text is not in the requirements artifact", result.stderr)
+
+    def test_build_artifact_check_leaves_permits_alone_unless_the_step_opts_in(self) -> None:
+        # A step instantiated from an older formula carries no switch: its
+        # artifact is validated exactly as before.
+        result = self._run_coverage_permit_check(coverage_permit_plan(None), step_permits=None)
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("permits=", result.stdout)
+
+    def test_build_artifact_check_fails_when_recorded_requirements_file_is_missing(self) -> None:
+        result = self._run_coverage_permit_check(
+            coverage_permit_plan(COVERAGE_PERMIT_QUOTE), requirements_text=None
+        )
+
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("recorded at gc.var.requirements_path", result.stderr)
+        self.assertIn("coverage permits cannot be checked", result.stderr)
+
+    def test_build_artifact_check_quotes_the_work_item_when_no_requirements_artifact_exists(self) -> None:
+        work_item = json.dumps(
+            [
+                {
+                    "id": "item-1",
+                    "title": "Guard team-less items",
+                    "description": "AC-2: after merge the alerts auto-close. " + COVERAGE_PERMIT_QUOTE,
+                }
+            ]
+        )
+        accepted = self._run_coverage_permit_check(
+            coverage_permit_plan(COVERAGE_PERMIT_QUOTE),
+            root_metadata={"gc.drain_member_id": "item-1"},
+            extra_beads={"item-1": work_item},
+        )
+        rejected = self._run_coverage_permit_check(
+            coverage_permit_plan("Nothing in the work item says this sentence at all."),
+            root_metadata={"gc.drain_member_id": "item-1"},
+            extra_beads={"item-1": work_item},
+        )
+        no_source = self._run_coverage_permit_check(
+            coverage_permit_plan(COVERAGE_PERMIT_QUOTE), root_metadata={}
+        )
+
+        self.assertEqual(accepted.returncode, 0, accepted.stdout + accepted.stderr)
+        self.assertIn("permits=work-item:item-1", accepted.stdout)
+        self.assertNotEqual(rejected.returncode, 0, rejected.stdout + rejected.stderr)
+        self.assertIn("permit text is not in the requirements artifact", rejected.stderr)
+        self.assertNotEqual(no_source.returncode, 0, no_source.stdout + no_source.stderr)
+        self.assertIn("no requirements artifact was supplied", no_source.stderr)
+
+    def test_coverage_permit_stages_carry_the_switch_and_explain_the_rule(self) -> None:
+        root = pathlib.Path(__file__).resolve().parents[1]
+
+        for (formula_name, step_id), doc in COVERAGE_PERMIT_STEPS.items():
+            with self.subTest(formula=formula_name, step=step_id):
+                formula = load_formula(root, formula_name)
+                step = {node["id"]: node for node in formula["steps"]}[step_id]
+                self.assertEqual(step["metadata"].get("gc.build.coverage_permits"), "required")
+                # The switch is read by the artifact gate, directly or through
+                # a script that chains it.
+                self.assertIn(
+                    pathlib.PurePosixPath(step["check"]["check"]["path"]).name,
+                    {"build-artifact-valid.sh", "implementation-handoff-valid.sh"},
+                )
+                text = (root / "assets" / "workflows" / doc).read_text(encoding="utf-8")
+                for fragment in ("`permit`", "word for word", "gc-gdyaz", "`status: blocked`"):
+                    self.assertIn(fragment, text, f"{doc} must explain coverage permits ({fragment})")
+
+        # No other producer stage enforces permits without telling its worker.
+        for path in sorted((root / "formulas").glob("*.formula.toml")):
+            formula = tomllib.loads(path.read_text(encoding="utf-8"))
+            for step in formula.get("steps", []):
+                if (step.get("metadata") or {}).get("gc.build.coverage_permits"):
+                    self.assertIn((formula["formula"], step["id"]), COVERAGE_PERMIT_STEPS)
+
+    def test_plan_stage_tells_the_author_how_to_account_for_each_requirement(self) -> None:
+        root = pathlib.Path(__file__).resolve().parents[1]
+        plan = (root / "assets" / "workflows" / "build-from-plan-base" / "plan.md").read_text(encoding="utf-8")
+        skill = (root / "skills" / "mayor" / "SKILL.md").read_text(encoding="utf-8")
+
+        for fragment in (
+            "Account for every requirement.",
+            "`trace.upstream[].ids`",
+            "`{{requirements_path}}`",
+            "A requirement already satisfied on the base branch",
+            "A plan that is not\n  approved needs no permits.",
+        ):
+            with self.subTest(fragment=fragment):
+                self.assertIn(fragment, plan)
+        self.assertIn("State hand-offs in the requirements themselves.", skill)
+        self.assertIn("`permit`", skill)
 
     def test_review_report_prompt_writes_to_the_rig_root(self) -> None:
         root = pathlib.Path(__file__).resolve().parents[1]

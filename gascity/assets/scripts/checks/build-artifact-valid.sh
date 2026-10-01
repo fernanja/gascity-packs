@@ -14,6 +14,15 @@ set -euo pipefail
 # the shared base validator. All failures print machine-readable lines on
 # stderr; the dispatcher records them in gc.attempt_log as repair context for
 # the next bounded producer attempt. This gate never prompts.
+#
+# Optional step metadata:
+#   gc.build.coverage_permits=required - the artifact may leave a requirement at
+#     a status other than "covered" only with a `permit` quoting the
+#     requirements artifact (gc-gdyaz). The requirements artifact is the one the
+#     workflow root records (gc.build.requirements_path, then
+#     gc.var.requirements_path), never one the artifact names for itself. A
+#     workflow with no requirements artifact (a bare implementation convoy)
+#     falls back to the text of its source work item.
 
 fail() {
   echo "build-artifact-check: $*" >&2
@@ -77,29 +86,35 @@ for key in "${KEYS[@]}"; do
 done
 [ -n "$ARTIFACT_PATH" ] || fail "no artifact path recorded on workflow root ${ROOT_ID:-$BEAD_ID}; tried metadata keys: $PATH_KEYS. The producing stage must record the resolved artifact path before closing."
 
+rig_root() {
+  # Formula artifact paths are rig-relative. A producer runs in a disposable
+  # per-bead worktree, so GC_WORK_DIR points at the wrong place whenever the
+  # runtime provides the durable rig root. Controller checks use
+  # GC_BEADS_SCOPE_ROOT on some runtimes, while agent sessions use
+  # GC_RIG_ROOT. A legacy hand-copied check under <rig>/.gc/scripts/checks
+  # derives the root from its own location. Do not use that fallback for a
+  # source-tree or pack-cache script. The ralph controller runs the formula's
+  # layer-resolved ../assets/scripts/checks/<name>.sh straight from the pinned
+  # pack (gc-yrouy) and exports the owning store root (rig or city) as
+  # GC_STORE_PATH, which is the durable root the artifact paths are relative to.
+  local root="${GC_RIG_ROOT:-${GC_BEADS_SCOPE_ROOT:-${GC_DIR:-}}}"
+  if [ -z "$root" ]; then
+    local installed
+    installed="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+    if [ -d "$installed/.gc" ]; then
+      root="$installed"
+    fi
+  fi
+  if [ -z "$root" ]; then
+    root="${GC_STORE_PATH:-}"
+  fi
+  printf '%s' "$root"
+}
+
 case "$ARTIFACT_PATH" in
   /*) ;;
   *)
-    # Formula artifact paths are rig-relative. A producer runs in a disposable
-    # per-bead worktree, so GC_WORK_DIR points at the wrong place whenever the
-    # runtime provides the durable rig root. Controller checks use
-    # GC_BEADS_SCOPE_ROOT on some runtimes, while agent sessions use
-    # GC_RIG_ROOT. A legacy hand-copied check under <rig>/.gc/scripts/checks
-    # derives the root from its own location. Do not use that fallback for a
-    # source-tree or pack-cache script. The ralph controller runs the formula's
-    # layer-resolved ../assets/scripts/checks/<name>.sh straight from the pinned
-    # pack (gc-yrouy) and exports the owning store root (rig or city) as
-    # GC_STORE_PATH, which is the durable root the artifact paths are relative to.
-    ARTIFACT_ROOT="${GC_RIG_ROOT:-${GC_BEADS_SCOPE_ROOT:-${GC_DIR:-}}}"
-    if [ -z "$ARTIFACT_ROOT" ]; then
-      INSTALLED_RIG_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
-      if [ -d "$INSTALLED_RIG_ROOT/.gc" ]; then
-        ARTIFACT_ROOT="$INSTALLED_RIG_ROOT"
-      fi
-    fi
-    if [ -z "$ARTIFACT_ROOT" ]; then
-      ARTIFACT_ROOT="${GC_STORE_PATH:-}"
-    fi
+    ARTIFACT_ROOT="$(rig_root)"
     if [ -n "$ARTIFACT_ROOT" ]; then
       ARTIFACT_PATH="$ARTIFACT_ROOT/$ARTIFACT_PATH"
     else
@@ -121,8 +136,68 @@ for candidate in \
 done
 [ -n "$VALIDATOR" ] || fail "validate_build_artifact.py not found beside $SCRIPT_DIR or under GC_WORK_DIR"
 
-if OUTPUT="$(python3 "$VALIDATOR" --schema "$SCHEMA" --path "$ARTIFACT_PATH" 2>&1)"; then
-  echo "build artifact valid: schema=$SCHEMA path=$ARTIFACT_PATH"
+VALIDATOR_ARGS=(--schema "$SCHEMA" --path "$ARTIFACT_PATH")
+PERMIT_NOTE=""
+PERMIT_TMP=""
+cleanup() {
+  [ -z "$PERMIT_TMP" ] || rm -rf "$PERMIT_TMP"
+}
+trap cleanup EXIT
+
+if [ "$(metadata_value "$SHOW_JSON" "gc.build.coverage_permits")" = "required" ]; then
+  VALIDATOR_ARGS+=(--require-coverage-permits)
+  REQUIREMENTS_PATH=""
+  for key in gc.build.requirements_path gc.var.requirements_path; do
+    value="$(metadata_value "$ROOT_JSON" "$key")"
+    [ -n "$value" ] || continue
+    case "$value" in
+      /*) ;;
+      *)
+        REQUIREMENTS_ROOT="$(rig_root)"
+        [ -n "$REQUIREMENTS_ROOT" ] || REQUIREMENTS_ROOT="${GC_WORK_DIR:-}"
+        [ -z "$REQUIREMENTS_ROOT" ] || value="$REQUIREMENTS_ROOT/$value"
+        ;;
+    esac
+    [ -f "$value" ] || fail "requirements artifact $value recorded at $key on workflow root ${ROOT_ID:-$BEAD_ID} does not exist; coverage permits cannot be checked"
+    REQUIREMENTS_PATH="$value"
+    break
+  done
+  if [ -n "$REQUIREMENTS_PATH" ]; then
+    VALIDATOR_ARGS+=(--requirements "$REQUIREMENTS_PATH")
+    PERMIT_NOTE=" permits=$REQUIREMENTS_PATH"
+  else
+    # No requirements artifact on this workflow: the source work item is the
+    # only statement of what was asked, so permits quote it.
+    SOURCE_ID="$(metadata_value "$ROOT_JSON" "gc.drain_member_id")"
+    [ -n "$SOURCE_ID" ] || SOURCE_ID="$(metadata_value "$ROOT_JSON" "gc.input_convoy_id")"
+    if [ -n "$SOURCE_ID" ] && SOURCE_JSON="$(gc bd show "$SOURCE_ID" --json 2>/dev/null)"; then
+      PERMIT_TMP="$(mktemp -d)"
+      printf '%s' "$SOURCE_JSON" | python3 -c '
+import json
+import sys
+
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    raise SystemExit(0)
+if isinstance(data, list):
+    data = data[0] if data else {}
+if not isinstance(data, dict):
+    raise SystemExit(0)
+for field in ("title", "description", "acceptance_criteria", "design", "notes"):
+    value = data.get(field)
+    if isinstance(value, str) and value.strip():
+        print(value)
+        print()
+' >"$PERMIT_TMP/work-item-$SOURCE_ID.md"
+      VALIDATOR_ARGS+=(--requirements "$PERMIT_TMP/work-item-$SOURCE_ID.md")
+      PERMIT_NOTE=" permits=work-item:$SOURCE_ID"
+    fi
+  fi
+fi
+
+if OUTPUT="$(python3 "$VALIDATOR" "${VALIDATOR_ARGS[@]}" 2>&1)"; then
+  echo "build artifact valid: schema=$SCHEMA path=$ARTIFACT_PATH$PERMIT_NOTE"
   exit 0
 fi
 

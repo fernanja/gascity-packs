@@ -21,6 +21,41 @@ name the real verification instead (another environment or tool, a headed
 run, or a documented manual check with evidence). Never fall back silently to
 modelling, and never skip verification.
 
+Account for every requirement. List each requirement and acceptance-criterion
+id of the requirements artifact under that artifact's `trace.upstream[].ids`,
+and give each a `trace.coverage` entry. `covered` means this plan delivers it
+and names how it is observed. Any other status (`deferred`, `blocked`,
+`out_of_scope`, `not_applicable`, `superseded`) needs, beside its `rationale`,
+a `permit`: the sentence in the requirements artifact that allows it, quoted
+word for word, at least 20 characters:
+
+```yaml
+- id: AC-3
+  status: out_of_scope
+  rationale: The alerts close only after merge; the plan lists them for the mayor.
+  permit: "The mayor checks this post-merge; it is not a worker AC."
+```
+
+The gate checks each quote against `{{requirements_path}}` (ignoring line
+wrapping and Markdown emphasis) and rejects the plan when a permit is missing
+or its text is not there (gc-gdyaz: a plan postponed a required check with a
+footnote, was approved, and the gap cost a three-hour fix loop).
+
+- A criterion the requirements give to someone else or to a later moment (a
+  post-merge check the mayor owns, a step the publish stage performs) is
+  permitted by the sentence that says so. Quote it.
+- An exclusion the requirements state is `out_of_scope`, with the exclusion
+  sentence as its permit.
+- A requirement already satisfied on the base branch, or one that asks for no
+  change, is `covered`, with the commit or the check as its evidence. It is
+  not a deferral.
+- Your own notes, discoveries and non-goals are not requirements. Keep them
+  out of `ids` and coverage; they belong under `## Non-Goals` and the risks.
+- If the requirements do not allow leaving something out and the plan cannot
+  deliver it, do not approve the plan around it. Set `status: blocked` (or
+  `questions`), state the decision needed, and stop. A plan that is not
+  approved needs no permits.
+
 Stale bundled items are blocking. Re-check each bundled bead, bug report, or
 cited `file:line`: `gc bd show <id>`, and the cited lines on the current base
 branch. One closed with a fixing commit, or whose cited code changed since the
@@ -41,4 +76,4 @@ var from workflow root metadata, and the artifact-validation gate below also
 resolves the path from workflow root metadata — recording these values on this
 step bead instead of the root satisfies neither and fails the run.
 
-Artifact validation: this stage is gated by `../assets/scripts/checks/build-artifact-valid.sh`, which validates the artifact recorded on the WORKFLOW ROOT at `gc.build.plan_path` (fallback `gc.var.plan_path`) against schema `gc.build.plan.v1`. On repair attempts (`gc.attempt` greater than 1), read the validator errors from `gc.attempt_log` on the validation loop control bead (the dependent of this step bead) and repair the artifact in place instead of rewriting it. Two bounded repair attempts follow the first failure; exhausting them closes this stage with `gc.outcome=fail` and machine-readable validation errors that block downstream stages. Never ask questions in headless mode; record unresolved ambiguity inside the artifact.
+Artifact validation: this stage is gated by `../assets/scripts/checks/build-artifact-valid.sh`, which validates the artifact recorded on the WORKFLOW ROOT at `gc.build.plan_path` (fallback `gc.var.plan_path`) against schema `gc.build.plan.v1` and checks every coverage permit against the requirements artifact the workflow root records (`gc.build.requirements_path`, fallback `gc.var.requirements_path`). On repair attempts (`gc.attempt` greater than 1), read the validator errors from `gc.attempt_log` on the validation loop control bead (the dependent of this step bead) and repair the artifact in place instead of rewriting it. Two bounded repair attempts follow the first failure; exhausting them closes this stage with `gc.outcome=fail` and machine-readable validation errors that block downstream stages. Never ask questions in headless mode; record unresolved ambiguity inside the artifact.

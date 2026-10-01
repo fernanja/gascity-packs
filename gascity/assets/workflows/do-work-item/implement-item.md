@@ -124,5 +124,20 @@ Trace front matter must use the validator shape exactly:
 - Coverage statuses are not artifact statuses. Use `covered` for satisfied
   requirements; do not use `approved` in `trace.coverage[].status` or the
   Markdown coverage table.
+- A coverage entry with any status other than `covered` needs a `permit`
+  beside its `rationale`: the sentence in the requirements artifact that
+  allows leaving it open, quoted word for word, at least 20 characters, for
+  example `permit: "The mayor checks this post-merge; it is not a worker AC."`.
+  The gate checks the quote against the requirements artifact recorded on the
+  workflow root (`gc.build.requirements_path`, fallback
+  `gc.var.requirements_path`; for a convoy with no requirements artifact, the
+  text of the work item) and rejects the summary when the permit is missing or
+  its text is not there (gc-gdyaz). "Not run", "no environment", "left for
+  review" and "left for publish" are not permits: a required check that has
+  not been run is work still to do. Run it and record the result. If it truly
+  cannot be done here, write the summary with `status: blocked` and say what is
+  missing: a blocked summary tells review in plain terms that the work is not
+  finished; it is not a way to pass. A requirement that was already satisfied
+  before your change is `covered`, with the evidence.
 
 Artifact validation: this step is gated by `../assets/scripts/checks/build-artifact-valid.sh`, which validates the summary recorded at `gc.implementation.summary_path` (fallbacks `gc.build.implementation_summary_path`, then `gc.var.summary_path`) against schema `gc.build.implementation-summary.v1`. Before closing this step, read the launcher rig root from the workflow root bead's `gc.work_dir`, then run the pinned pack's copy of the same validator locally from that rig root (the command resolves the gate script through gc's formula layers, exactly as the controller does) with `GC_BEAD_ID=<claimed-step-id> "$(gc formula list --json | python3 -c 'import json,os,sys; c=[os.path.join(os.path.dirname(p),"assets/scripts/checks/build-artifact-valid.sh") for p in json.load(sys.stdin)["search_paths"]]; print([p for p in c if os.path.isfile(p)][-1])')"`; fix every reported validation error before setting `gc.outcome=pass`. On repair attempts (`gc.attempt` greater than 1), read the validator errors from `gc.attempt_log` on the validation loop control bead (the dependent of this step bead) and repair the summary in place instead of rewriting it. Two bounded repair attempts follow the first failure; exhausting them closes this stage with `gc.outcome=fail` and machine-readable validation errors that block downstream stages. Never ask questions in headless mode; record unresolved ambiguity inside the summary.
