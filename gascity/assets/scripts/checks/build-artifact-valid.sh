@@ -27,7 +27,9 @@ set -euo pipefail
 #     gc.root_bead_id): build-basic and build-from-requirements record the path
 #     their own requirements stage wrote on the parent root only. If no root
 #     records one, a quote is never checked against some other text: an
-#     artifact that needs a permit fails with how to record the path.
+#     artifact that needs a permit fails with how to record the path. The
+#     every-id rule is not applied to an item summary in a drain of several
+#     work items (gc.drain_count > 1 on its root); permits still are.
 #
 # Exit codes: 0 valid; 1 invalid (a failed attempt); 75 no verdict, because
 # `gc bd show` kept failing for a reason that says nothing about the artifact.
@@ -246,6 +248,17 @@ if [ "$(metadata_value "$SHOW_JSON" "gc.build.coverage_permits")" = "required" ]
     # quote is never checked against the work item or any other text.
     VALIDATOR_ARGS+=(--requirements-hint "no workflow root ($WALKED) records gc.build.requirements_path or gc.var.requirements_path. Record the requirements this build works from on the workflow root, then close the step again: gc bd update $WALK_ID --set-metadata gc.build.requirements_path=<absolute path to the requirements file>. If there is no requirements file, nothing can permit leaving a requirement open: do the work, or set the artifact status to blocked")
     PERMIT_NOTE=" requirements=unresolved"
+  fi
+  # One work item of a drain of several delivers part of the requirements, so
+  # its summary is not asked for every requirement id (the engine stamps the
+  # member count on each item root). A drain of one, and a plan, are.
+  DRAIN_COUNT="$(metadata_value "$ROOT_JSON" "gc.drain_count")"
+  case "$DRAIN_COUNT" in
+    '' | *[!0-9]*) DRAIN_COUNT=1 ;;
+  esac
+  if [ "$DRAIN_COUNT" -gt 1 ]; then
+    VALIDATOR_ARGS+=(--partial-coverage "one work item of $DRAIN_COUNT")
+    PERMIT_NOTE="$PERMIT_NOTE requirement-ids=not-required(one-work-item-of-$DRAIN_COUNT)"
   fi
 fi
 

@@ -205,7 +205,9 @@ Trace front matter must use the validator shape exactly:
   entry, whether or not you list it under `ids`. The gate reads the ids from
   the requirements file itself: labels such as `AC-1`, `SCOPE-2`, `REQ-3`,
   `OQ-4` or `CON-5` that lead a list item, a heading or a paragraph. A summary
-  that leaves one out of both lists is rejected.
+  that leaves one out of both lists is rejected. The one exception is a build
+  split into several work items: each item's summary covers what its own work
+  item delivers, and the gate does not ask it for every id.
 - A coverage entry with any status other than `covered` needs a `permit`
   beside its `rationale`: the sentence in the requirements artifact that
   hands the requirement off, quoted word for word, at least 20 characters, for

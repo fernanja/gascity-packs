@@ -5772,7 +5772,9 @@ description = "Override sink that writes the base triage report contract."
                     "requirements.md" if requirements_relative_to else str(requirements)
                 )
             else:
-                root_meta.update(root_metadata)
+                root_meta.update(
+                    {key: value.replace("<requirements>", str(requirements)) for key, value in root_metadata.items()}
+                )
             beads = {
                 "loop": json.dumps([{"id": "loop", "metadata": step_meta}]),
                 **(extra_beads or {}),
@@ -5921,6 +5923,34 @@ description = "Override sink that writes the base triage report contract."
         self.assertIn("every requirement id the requirements artifact defines", result.stderr)
         self.assertIn("missing from", result.stderr)
         self.assertIn("requirements.md: AC-3", result.stderr)
+
+        # A drain of one work item is the whole build: same rule.
+        single = self._run_coverage_permit_check(
+            coverage_permit_plan(COVERAGE_PERMIT_QUOTE),
+            requirements_text=requirements,
+            root_metadata={"gc.drain_count": "1", "gc.var.requirements_path": "<requirements>"},
+        )
+        self.assertNotEqual(single.returncode, 0, single.stdout + single.stderr)
+        self.assertIn("requirements.md: AC-3", single.stderr)
+
+    def test_build_artifact_check_does_not_ask_one_work_item_of_several_for_every_id(self) -> None:
+        # The engine stamps the number of drain members on each item root. One
+        # item of three delivers part of the requirements; its permits are
+        # still checked.
+        requirements = COVERAGE_PERMIT_REQUIREMENTS + "- **AC-3:** the other work item's criterion.\n"
+        root_metadata = {"gc.drain_count": "3", "gc.drain_index": "1", "gc.var.requirements_path": "<requirements>"}
+        accepted = self._run_coverage_permit_check(
+            coverage_permit_plan(COVERAGE_PERMIT_QUOTE), requirements_text=requirements, root_metadata=root_metadata
+        )
+        unpermitted = self._run_coverage_permit_check(
+            coverage_permit_plan(None), requirements_text=requirements, root_metadata=root_metadata
+        )
+
+        self.assertEqual(accepted.returncode, 0, accepted.stdout + accepted.stderr)
+        self.assertIn("requirement-ids=not-required(one-work-item-of-3)", accepted.stdout)
+        self.assertNotEqual(unpermitted.returncode, 0, unpermitted.stdout + unpermitted.stderr)
+        self.assertIn("trace.coverage[AC-2] (status 'deferred'): missing permit", unpermitted.stderr)
+        self.assertNotIn("every requirement id", unpermitted.stderr)
 
     def test_build_artifact_check_rejects_a_permit_that_quotes_the_requirement_itself(self) -> None:
         result = self._run_coverage_permit_check(coverage_permit_plan("after merge the alerts auto-close."[6:]))

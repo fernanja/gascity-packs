@@ -48,7 +48,9 @@ FORBIDDEN_REQUIRED_FIELD_NAMES = {"owner", "stage-owner", "stage_owner", "person
 #    let any requirement permit its own deferral.
 #
 # An artifact whose own status already says the work is not approved is held
-# to neither rule: it stops the build by itself.
+# to neither rule: it stops the build by itself. Rule 1 is not applied to the
+# summary of one work item in a drain of several (--partial-coverage): it
+# delivers part of the requirements, and they do not say which part.
 PERMIT_EXEMPT_ARTIFACT_STATUSES = frozenset({"blocked", "questions", "changes_required", "superseded"})
 MIN_PERMIT_CHARS = 20
 PERMIT_FOLD_TABLE = str.maketrans(
@@ -170,6 +172,7 @@ def validate_artifact_text(
     require_coverage_permits: bool = False,
     requirements_sources: list[tuple[str, str]] | None = None,
     requirements_hint: str = "",
+    partial_coverage: str = "",
 ) -> BuildArtifact:
     """Validate one build artifact.
 
@@ -177,7 +180,9 @@ def validate_artifact_text(
     requirements_sources is the (label, text) list whose requirement ids must
     all be covered and whose text a permit may quote. The caller supplies it:
     an artifact never names its own requirements. requirements_hint says, for
-    the error message, why the list is empty when it is.
+    the error message, why the list is empty when it is. partial_coverage, when
+    set, says why this artifact covers only part of the requirements (one item
+    of a drain of several): the every-id rule is then not applied.
     """
     schema_id, front_matter, body = parse_front_matter(text)
     if expected_schema and schema_id != expected_schema:
@@ -191,7 +196,9 @@ def validate_artifact_text(
     coverage = validate_coverage(trace, schema)
     validate_coverage_completeness(upstream, coverage)
     if require_coverage_permits:
-        validate_requirements_coverage(front_matter, coverage, requirements_sources or [], requirements_hint)
+        validate_requirements_coverage(
+            front_matter, coverage, requirements_sources or [], requirements_hint, partial_coverage
+        )
     validate_markdown_coverage(body, coverage)
     validate_required_sections(body, schema)
     return BuildArtifact(
@@ -508,6 +515,7 @@ def validate_requirements_coverage(
     coverage: list[dict[str, Any]],
     requirements_sources: list[tuple[str, str]],
     requirements_hint: str = "",
+    partial_coverage: str = "",
 ) -> None:
     """Both coverage rules, reported together so one repair pass can fix both."""
     if str(front_matter.get("status", "")).strip() in PERMIT_EXEMPT_ARTIFACT_STATUSES:
@@ -515,7 +523,10 @@ def validate_requirements_coverage(
     problems = [
         problem
         for problem in (
-            missing_requirement_ids_problem(coverage, requirements_sources),
+            # One work item of several delivers some of the requirements; the
+            # requirements artifact does not say which, so the every-id rule
+            # cannot be applied to it.
+            "" if partial_coverage else missing_requirement_ids_problem(coverage, requirements_sources),
             coverage_permits_problem(coverage, requirements_sources, requirements_hint),
         )
         if problem
@@ -719,6 +730,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Requirements artifact whose ids must all be covered and whose text a permit may quote (repeatable)",
     )
     parser.add_argument(
+        "--partial-coverage",
+        default="",
+        metavar="WHY",
+        help="This artifact covers only part of the requirements (for example 'item 2 of 3'): do not require every requirement id",
+    )
+    parser.add_argument(
         "--requirements-hint",
         default="",
         metavar="TEXT",
@@ -736,6 +753,7 @@ def main(argv: list[str] | None = None) -> int:
             require_coverage_permits=args.require_coverage_permits,
             requirements_sources=read_requirements_sources(args.requirements) if args.require_coverage_permits else None,
             requirements_hint=args.requirements_hint,
+            partial_coverage=args.partial_coverage,
         )
     except CLI_ERROR_TYPES as exc:
         print(f"error: {exc}", file=sys.stderr)

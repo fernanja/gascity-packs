@@ -739,6 +739,25 @@ class CoveragePermitTests(unittest.TestCase):
                 self.assertIn("missing from requirements.md: AC-3", message)
                 self.assertNotIn("AC-1", message)
 
+    def test_one_work_item_of_several_is_not_asked_for_every_id_but_still_needs_permits(self) -> None:
+        schema = "gc.build.implementation-summary.v1"
+        sources = [("requirements.md", self.REQUIREMENTS)]
+        build_artifact_validator.validate_artifact_text(
+            self.omitting_ac3(schema),
+            expected_schema=schema,
+            require_coverage_permits=True,
+            requirements_sources=sources,
+            partial_coverage="one work item of 3",
+        )
+        with self.assertRaisesRegex(build_artifact_validator.ValidationError, r"AC-3.*missing permit"):
+            build_artifact_validator.validate_artifact_text(
+                self.artifact(schema, ac3_status="deferred"),
+                expected_schema=schema,
+                require_coverage_permits=True,
+                requirements_sources=sources,
+                partial_coverage="one work item of 3",
+            )
+
     def test_missing_ids_and_missing_permits_are_reported_together(self) -> None:
         requirements = self.REQUIREMENTS + "\n- **AC-4:** the summary lists the unshipped commits.\n"
         with self.assertRaises(build_artifact_validator.ValidationError) as caught:

@@ -140,7 +140,9 @@ order:
 Every requirement id the requirements artifact defines (`AC-1`, `SCOPE-2`,
 `REQ-3`, `OQ-4`, `CON-5` and the like, where it leads a list item, a heading or
 a paragraph) needs a `trace.coverage` entry; the gate reads the ids from the
-requirements file itself. An entry with any status other than `covered` needs a
+requirements file itself (a build split into several work items is the
+exception: each item's summary covers what its own work item delivers). An
+entry with any status other than `covered` needs a
 `permit` beside its `rationale`: the sentence in the requirements artifact that
 hands the requirement off, quoted word for word, at least 20 characters. The
 quote must itself say the requirement is for later, for someone else, or not
