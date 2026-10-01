@@ -5,6 +5,20 @@ after fixes. Continue only while the iteration count is below
 `{{max_iterations}}`. Record the follow-up review report path on workflow root
 metadata as `gc.build.review_report_path` before closing.
 
+The preflight gate is not a test run for every kind of change. Find out what it
+actually executes in this repo before treating it as coverage (in the ascent
+repo, `make preflight-fast` runs no Django tests at all). For every test module
+the diff adds or changes, and for the tests that cover each source file the
+diff changes, run them yourself in the implementation worktree with the repo's
+own test command (for example `make test ARGS='<module> <module>'`) and record
+the exact command, the tally and the exit code in the report. A test the diff
+itself adds or edits that you have not seen pass is missing evidence: the
+verdict cannot be `approved`. After a merge of the default branch into the
+work branch, run them again on the merged commit: a test can pass on the
+branch and fail once the default branch's changes arrive (gc-4kgy1: a review
+approved, and publish pushed, a commit whose own new test had been failing
+since the merge).
+
 Report the class of a defect, not only the instance. When you find one, look
 for every other occurrence of the same kind in the diff and in the code it
 touches, and list them all in the same finding (file and line for each), so

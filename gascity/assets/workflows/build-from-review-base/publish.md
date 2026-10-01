@@ -58,6 +58,15 @@ right commit without checking. Follow this protocol exactly:
    workflow root before closing -- this is the sha a PR title/body may
    truthfully claim as published.
 
+**Report what the pre-push checks actually said (gc-4kgy1).** When a push runs
+the repo's pre-push hooks, keep their output and quote the decisive lines in
+this step's close reason: each hook's pass/fail line and, for a test run, the
+test count and the final `OK` or `FAILED` line. Do not write that the checks
+passed without that quote. If a hook fails, the push did not happen: fix the
+cause or fail this step with the hook's output; never skip or bypass a hook to
+get the push through. A failure in a test the branch itself adds or changes is
+not a flake and is not resolved by resetting databases or retrying.
+
 This is exactly the gap that shipped fernanja/ascent_app#2462 on continuation
 root gcas-p0g3rr: the publish step reported "branch was already pushed at
 approved commit 00c89571d" -- the previous blocked run's pre-repair head --

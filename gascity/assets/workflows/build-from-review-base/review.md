@@ -30,6 +30,20 @@ attention-dependent, not guaranteed (one re-review caught a missing run, an
 identical re-review of a different item did not). A failing run is a required
 fix (`changes_required`), not missing evidence.
 
+The preflight gate is not a test run for every kind of change. Find out what it
+actually executes in this repo before treating it as coverage (in the ascent
+repo, `make preflight-fast` runs no Django tests at all). For every test module
+the diff adds or changes, and for the tests that cover each source file the
+diff changes, run them yourself in the implementation worktree with the repo's
+own test command (for example `make test ARGS='<module> <module>'`) and record
+the exact command, the tally and the exit code in the report. A test the diff
+itself adds or edits that you have not seen pass is missing evidence: the
+verdict cannot be `approved`. After a merge of the default branch into the
+work branch, run them again on the merged commit: a test can pass on the
+branch and fail once the default branch's changes arrive (gc-4kgy1: a review
+approved, and publish pushed, a commit whose own new test had been failing
+since the merge).
+
 Verify load-bearing facts before any wording concern: the SHAs, what actually
 failed, and the failing code's content at the failure SHA. Accept a fix for an
 intermittent or timing failure only with evidence that the pre-fix code fails
