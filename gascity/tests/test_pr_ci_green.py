@@ -35,21 +35,51 @@ if [ "${1:-}" = "auth" ]; then
 fi
 [ "${1:-}" = "api" ] || { echo "stub gh: unsupported: $*" >&2; exit 2; }
 key="$(printf '%s' "$2" | tr -c 'A-Za-z0-9._-' '_')"
+# <key>.flaky holds how many more times the route answers with <key>.error
+# before it serves <key>.json.
+if [ -f "$dir/$key.flaky" ] && [ "$(cat "$dir/$key.flaky")" -gt 0 ]; then
+  echo $(( $(cat "$dir/$key.flaky") - 1 )) >"$dir/$key.flaky"
+  cat "$dir/$key.error" >&2; exit 1
+fi
 if [ -f "$dir/$key.json" ]; then cat "$dir/$key.json"; exit 0; fi
 if [ -f "$dir/$key.error" ]; then cat "$dir/$key.error" >&2; exit 1; fi
-echo '{"message":"Not Found"}'
-echo "gh: Not Found (HTTP 404)" >&2
-exit 1
+# A route no test declared is a bug in the test or an API call nobody meant to
+# make. It is never a quiet 404.
+echo "$2" >>"$dir/unrouted.log"
+echo "stub gh: UNROUTED $2" >&2
+exit 97
 """
 
 GC_STUB = r"""#!/usr/bin/env bash
 set -euo pipefail
-if [ "${1:-}" = "bd" ] && [ "${2:-}" = "show" ] && [ -f "${BD_SHOW_DIR:?}/$3.json" ]; then
-  cat "$BD_SHOW_DIR/$3.json"; exit 0
+dir="${BD_SHOW_DIR:?}"
+if [ "${1:-}" = "bd" ] && [ "${2:-}" = "show" ]; then
+  id="$3"
+  if [ -f "$dir/$id.flaky" ] && [ "$(cat "$dir/$id.flaky")" -gt 0 ]; then
+    echo $(( $(cat "$dir/$id.flaky") - 1 )) >"$dir/$id.flaky"
+    cat "$dir/$id.error" >&2; exit 1
+  fi
+  if [ -f "$dir/$id.json" ]; then cat "$dir/$id.json"; exit 0; fi
+  if [ -f "$dir/$id.error" ]; then cat "$dir/$id.error" >&2; exit 1; fi
+  echo "Error fetching $id: no issue found matching \"$id\"" >&2
+  exit 1
+fi
+if [ "${1:-}" = "bd" ] && [ "${2:-}" = "update" ]; then
+  if [ -f "$dir/update-fails" ]; then echo "events: lock timed out" >&2; exit 1; fi
+  shift 2
+  echo "$*" >>"$dir/updates.log"
+  exit 0
 fi
 echo "stub gc: unsupported: $*" >&2
 exit 1
 """
+
+
+OLDER_1 = "a" * 40
+OLDER_2 = "b" * 40
+NOT_FOUND = "gh: Not Found (HTTP 404)"
+RATE_LIMITED = "gh: API rate limit exceeded for user ID 1. (HTTP 403)"
+NO_VERDICT = 75
 
 
 def route(path: str) -> str:
@@ -65,8 +95,21 @@ def check_run(name: str, status: str = "completed", conclusion: str | None = "su
     }
 
 
+def base_run(name: str, conclusion: str = "success", status: str = "completed") -> dict:
+    return {
+        "name": name,
+        "status": status,
+        "conclusion": conclusion if status == "completed" else None,
+        "html_url": f"https://github.com/{REPO}/actions/runs/9/job/{abs(hash(name)) % 100000}",
+    }
+
+
 class Fixture:
-    """One temp dir holding a git repo, bead JSON, gh routes and the stub binaries."""
+    """One temp dir holding a git repo, bead JSON, gh routes and the stub binaries.
+
+    The base branch is `main`: protected, requiring `ci-gate`, with a green
+    `ci-gate` on its head and no older commits, unless a test says otherwise.
+    """
 
     def __init__(self, tmp: pathlib.Path, *, origin: str = f"https://github.com/{REPO}.git") -> None:
         self.tmp = tmp
@@ -94,6 +137,9 @@ class Fixture:
         self.git("remote", "add", "origin", origin)
         self.route(f"repos/{REPO}", {"default_branch": "main"})
         self.route(f"repos/{REPO}/actions/workflows?per_page=1", {"total_count": 3})
+        self.base_branch(required=["ci-gate"])
+        self.base_checks([base_run("ci-gate")])
+        self.base_history([])
 
     def git(self, *args: str) -> str:
         proc = subprocess.run(
@@ -125,41 +171,106 @@ class Fixture:
         self.bead("step", {"gc.root_bead_id": "root"})
         self.bead("root", metadata)
 
+    def recorded_results(self) -> list[str]:
+        log = self.beads / "updates.log"
+        return log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+
     # ---- GitHub
 
     def route(self, path: str, payload) -> None:
         (self.gh_dir / f"{route(path)}.json").write_text(json.dumps(payload), encoding="utf-8")
 
-    def route_error(self, path: str, message: str) -> None:
+    def route_error(self, path: str, message: str, *, times: int | None = None) -> None:
+        """Answer path with an error: always, or `times` times before its JSON."""
         (self.gh_dir / f"{route(path)}.error").write_text(message + "\n", encoding="utf-8")
+        if times is None:
+            (self.gh_dir / f"{route(path)}.json").unlink(missing_ok=True)
+        else:
+            (self.gh_dir / f"{route(path)}.flaky").write_text(str(times), encoding="utf-8")
+
+    def check_runs_path(self, sha: str | None = None) -> str:
+        return f"repos/{REPO}/commits/{sha or self.head}/check-runs?filter=latest&per_page=100&page=1"
 
     def pulls(self, pulls: list[dict], *, branch: str = BRANCH, state: str = "open") -> None:
         self.route(f"repos/{REPO}/pulls?head=acme:{branch}&state={state}&per_page=100", pulls)
 
-    def pull(self, *, number: int = 7, head: str | None = None, state: str = "open", draft: bool = True) -> dict:
+    def commit_pulls(self, pulls: list[dict] | None, *, sha: str | None = None) -> None:
+        """Pull requests GitHub associates with a commit; None means it was never pushed."""
+        path = f"repos/{REPO}/commits/{sha or self.head}/pulls?per_page=100"
+        if pulls is None:
+            self.route_error(path, NOT_FOUND)
+        else:
+            self.route(path, pulls)
+
+    def pull(self, *, number: int = 7, head: str | None = None, state: str = "open", draft: bool = True, ref: str = BRANCH) -> dict:
         return {
             "number": number,
             "state": state,
             "draft": draft,
             "html_url": f"https://github.com/{REPO}/pull/{number}",
-            "head": {"sha": head or self.head, "ref": BRANCH},
+            "head": {"sha": head or self.head, "ref": ref},
+            "base": {"ref": "main"},
         }
 
-    def checks(self, runs: list[dict], *, sha: str | None = None, statuses: list[dict] | None = None) -> None:
+    def checks(
+        self,
+        runs: list[dict],
+        *,
+        sha: str | None = None,
+        statuses: list[dict] | None = None,
+        workflow_runs: list[dict] | None = None,
+    ) -> None:
         sha = sha or self.head
-        self.route(
-            f"repos/{REPO}/commits/{sha}/check-runs?filter=latest&per_page=100&page=1",
-            {"total_count": len(runs), "check_runs": runs},
-        )
+        self.route(self.check_runs_path(sha), {"total_count": len(runs), "check_runs": runs})
         self.route(f"repos/{REPO}/commits/{sha}/status?per_page=100", {"state": "pending", "statuses": statuses or []})
+        self.route(
+            f"repos/{REPO}/actions/runs?head_sha={sha}&per_page=100",
+            {"total_count": len(workflow_runs or []), "workflow_runs": workflow_runs or []},
+        )
+
+    def base_branch(self, *, required: list[str] | None, protected: bool = True, rulesets: list[dict] | None = None) -> None:
+        """`required=None` on a protected branch: the protection is not shown to this login."""
+        branch: dict = {"name": "main", "commit": {"sha": self.base}, "protected": protected}
+        if protected and required is not None:
+            branch["protection"] = {
+                "enabled": True,
+                "required_status_checks": {
+                    "enforcement_level": "everyone",
+                    "contexts": required,
+                    "checks": [{"context": name, "app_id": 15368} for name in required],
+                },
+            }
+        self.route(f"repos/{REPO}/branches/main", branch)
+        self.route(f"repos/{REPO}/rules/branches/main?per_page=100", rulesets or [])
+
+    def base_checks(self, runs: list[dict], *, sha: str | None = None, statuses: list[dict] | None = None) -> None:
+        sha = sha or self.base
+        self.route(self.check_runs_path(sha), {"total_count": len(runs), "check_runs": runs})
+        self.route(f"repos/{REPO}/commits/{sha}/status?per_page=100", {"state": "success", "statuses": statuses or []})
+
+    def base_history(self, older: list[str]) -> None:
+        """Commits on main behind its head, newest first."""
+        self.route(f"repos/{REPO}/commits?sha=main&per_page=11", [{"sha": sha} for sha in [self.base, *older]])
 
     def gh_calls(self) -> list[str]:
         log = self.gh_dir / "calls.log"
         return log.read_text(encoding="utf-8").splitlines() if log.exists() else []
 
+    def unrouted(self) -> list[str]:
+        log = self.gh_dir / "unrouted.log"
+        return log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+
     # ---- run
 
-    def run(self, *args: str, script: pathlib.Path = SCRIPT, env: dict | None = None, path: str | None = None, bead: str | None = "step") -> subprocess.CompletedProcess:
+    def run(
+        self,
+        *args: str,
+        script: pathlib.Path = SCRIPT,
+        env: dict | None = None,
+        path: str | None = None,
+        bead: str | None = "step",
+        timeout: float | None = None,
+    ) -> subprocess.CompletedProcess:
         full_env = {
             "PATH": path if path is not None else f"{self.bin}{os.pathsep}{os.environ.get('PATH', '')}",
             "HOME": os.environ.get("HOME", str(self.city)),
@@ -167,12 +278,17 @@ class Fixture:
             "GH_STUB_DIR": str(self.gh_dir),
             "BD_SHOW_DIR": str(self.beads),
             "GC_STORE_PATH": str(self.repo),
-            "PR_CI_GREEN_RETRY_SLEEP_SECONDS": "0",
+            "PR_CI_GREEN_RETRY_SLEEP_SECONDS": "0.05",
+            # Long enough that a retry always happens on a loaded host; a test
+            # of a failure that never clears sets its own short budget.
+            "PR_CI_GREEN_INFRA_BUDGET_SECONDS": "30",
             **(env or {}),
         }
         if bead is not None:
             full_env["GC_BEAD_ID"] = bead
-        return subprocess.run([str(script), *args], env=full_env, cwd=str(self.city), capture_output=True, text=True, check=False)
+        return subprocess.run(
+            [str(script), *args], env=full_env, cwd=str(self.city), capture_output=True, text=True, check=False, timeout=timeout
+        )
 
 
 class PrCiGreenTestCase(unittest.TestCase):
@@ -180,20 +296,38 @@ class PrCiGreenTestCase(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.fx = Fixture(pathlib.Path(self._tmp.name).resolve())
+        self.addCleanup(self.assert_every_github_call_was_declared)
+
+    def assert_every_github_call_was_declared(self) -> None:
+        self.assertEqual(self.fx.unrouted(), [], "the gate called GitHub routes this test did not declare")
 
     def assert_pass(self, result: subprocess.CompletedProcess) -> None:
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("pr-ci-green: PASS", result.stdout)
 
-    def assert_skipped(self, result: subprocess.CompletedProcess, reason: str) -> None:
+    def assert_skipped(self, result: subprocess.CompletedProcess, reason: str, *, loud: bool | None = None) -> None:
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("pr-ci-green: skipped: ", result.stdout)
         self.assertIn(reason, result.stdout)
         self.assertNotIn("PASS", result.stdout)
+        if loud is True:
+            self.assertIn("pr-ci-green: WARNING the CI gate did not run and the step passes unchecked", result.stderr)
+            self.assertIn(reason, result.stderr)
+        elif loud is False:
+            self.assertEqual(result.stderr, "")
 
     def assert_fail(self, result: subprocess.CompletedProcess, *fragments: str) -> None:
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("pr-ci-green: FAIL", result.stderr)
+        self.assertNotIn("PASS", result.stdout)
+        self.assertNotIn("skipped", result.stdout)
+        for fragment in fragments:
+            self.assertIn(fragment, result.stderr)
+
+    def assert_no_verdict(self, result: subprocess.CompletedProcess, *fragments: str) -> None:
+        self.assertEqual(result.returncode, NO_VERDICT, result.stdout + result.stderr)
+        self.assertIn("pr-ci-green: INFRA", result.stderr)
+        self.assertNotIn("pr-ci-green: FAIL", result.stderr)
         self.assertNotIn("PASS", result.stdout)
         self.assertNotIn("skipped", result.stdout)
         for fragment in fragments:
@@ -219,6 +353,30 @@ class ImplementationHandoffTests(PrCiGreenTestCase):
         self.assert_pass(result)
         self.assertIn(f"{REPO}#7 head={self.fx.head} checks=5 (passed 4, skipped 1)", result.stdout)
         self.assertIn("pr_state=draft", result.stdout)
+        self.assertNotIn("WARNING", result.stdout + result.stderr)
+        # The result is kept on the workflow root.
+        self.assertEqual(len(self.fx.recorded_results()), 1)
+        self.assertIn("root --set-metadata gc.build.ci_gate_result=PASS", self.fx.recorded_results()[0])
+
+    def test_a_result_that_cannot_be_recorded_still_passes(self) -> None:
+        self.fx.checks([check_run("ci-gate")])
+        (self.fx.beads / "update-fails").write_text("", encoding="utf-8")
+
+        self.assert_pass(self.fx.run())
+
+    def test_a_pull_request_marked_ready_fails_with_the_command_that_makes_it_a_draft_again(self) -> None:
+        # A ready, green, unreviewed pull request is what a merge sweep merges.
+        self.fx.pulls([self.fx.pull(draft=False)])
+        self.fx.checks([check_run("ci-gate")])
+
+        result = self.fx.run()
+
+        self.assert_fail(
+            result,
+            f"{REPO}#7 is marked ready for review but has not been reviewed",
+            f"gh pr ready --undo 7 --repo {REPO}",
+            "Only the publish step marks it ready",
+        )
 
     def test_a_failed_check_fails_and_is_listed_with_its_url(self) -> None:
         red = check_run("build (24.x)", conclusion="failure")
@@ -226,7 +384,13 @@ class ImplementationHandoffTests(PrCiGreenTestCase):
 
         result = self.fx.run()
 
-        self.assert_fail(result, "1 failed, 0 unfinished, of 2 checks", f"FAILED  build (24.x) (failure) {red['html_url']}")
+        self.assert_fail(
+            result,
+            "1 failed, 0 unfinished, of 2 checks",
+            f"FAILED  build (24.x) (failure) {red['html_url']} [main: no result]",
+            "fix what this branch broke",
+            "gc.outcome=fail and gc.failure_class=hard",
+        )
 
     def test_infrastructure_conclusions_are_red_not_classified(self) -> None:
         for conclusion in ("cancelled", "timed_out", "startup_failure", "action_required", "stale"):
@@ -246,10 +410,59 @@ class ImplementationHandoffTests(PrCiGreenTestCase):
             "0 failed, 2 unfinished, of 3 checks",
             f"PENDING vitest browser (shard 3/4) (in_progress) {running['html_url']}",
             f"PENDING playwright (queued) {queued['html_url']}",
-            "Wait for the unfinished checks to complete",
+            "Wait for the unfinished checks and workflow runs to complete",
         )
 
+    def test_a_workflow_run_still_in_progress_fails_even_when_every_check_run_is_green(self) -> None:
+        # A job behind `needs:` has no check run until it is queued, so the
+        # check runs that exist can all be green while CI is still running.
+        run_url = f"https://github.com/{REPO}/actions/runs/55"
+        for status in ("queued", "in_progress", "waiting", "requested", "pending"):
+            with self.subTest(status=status):
+                self.fx.checks(
+                    [check_run("ci-gate"), check_run("changes")],
+                    workflow_runs=[
+                        {"name": "Run Django Tests", "status": "completed", "conclusion": "success", "html_url": "https://example.test/1"},
+                        {"name": "Build SPA Frontend", "status": status, "conclusion": None, "html_url": run_url},
+                    ],
+                )
+
+                result = self.fx.run()
+
+                self.assert_fail(
+                    result,
+                    "0 failed, 1 unfinished, of 2 checks",
+                    f"PENDING workflow run: Build SPA Frontend ({status}) {run_url}",
+                    "Wait for the unfinished checks and workflow runs to complete",
+                )
+
+    def test_a_required_check_that_has_not_reported_fails(self) -> None:
+        self.fx.base_branch(required=["ci-gate", "vitest-browser-gate"])
+        self.fx.checks([check_run("ci-gate"), check_run("changes")])
+
+        result = self.fx.run()
+
+        self.assert_fail(
+            result,
+            "0 failed, 1 unfinished, of 2 checks",
+            "MISSING vitest-browser-gate (required by main, has not reported on this commit)",
+        )
+
+    def test_a_check_required_by_a_ruleset_must_report_too(self) -> None:
+        self.fx.base_branch(
+            required=[],
+            protected=False,
+            rulesets=[
+                {"type": "pull_request"},
+                {"type": "required_status_checks", "parameters": {"required_status_checks": [{"context": "ruleset-gate"}]}},
+            ],
+        )
+        self.fx.checks([check_run("ci-gate")])
+
+        self.assert_fail(self.fx.run(), "MISSING ruleset-gate (required by main")
+
     def test_only_skipped_checks_is_green(self) -> None:
+        self.fx.base_branch(required=[])
         self.fx.checks([check_run("deploy", conclusion="skipped"), check_run("docs", conclusion="skipped")])
 
         result = self.fx.run()
@@ -267,20 +480,37 @@ class ImplementationHandoffTests(PrCiGreenTestCase):
 
     def test_no_pull_request_fails_when_the_workflow_publishes(self) -> None:
         self.fx.pulls([])
+        self.fx.commit_pulls([])
         self.fx.route(f"repos/{REPO}/compare/main...{self.fx.head}", {"ahead_by": 1, "status": "ahead"})
 
         result = self.fx.run()
 
-        self.assert_fail(result, f"no open pull request for branch {BRANCH} in {REPO}", "gh pr create --draft")
+        self.assert_fail(
+            result, f"no open pull request for branch {BRANCH} or commit {self.fx.head[:12]} in {REPO}", "gh pr create --draft"
+        )
 
     def test_unpushed_commit_fails_when_the_workflow_publishes(self) -> None:
-        self.fx.pulls([])  # the compare call 404s: GitHub has never seen the commit
+        self.fx.pulls([])
+        self.fx.commit_pulls(None)  # GitHub has never seen the commit
+        self.fx.route_error(f"repos/{REPO}/compare/main...{self.fx.head}", NOT_FOUND)
 
         self.assert_fail(self.fx.run(), f"no open pull request for branch {BRANCH}")
 
+    def test_a_branch_pushed_under_another_name_is_found_by_its_commit(self) -> None:
+        # The worktree branch is BRANCH; it was pushed as another ref, so no
+        # pull request has BRANCH as its head.
+        self.fx.pulls([])
+        self.fx.commit_pulls([self.fx.pull(number=12, ref="gcas-abc123-renamed-on-push")])
+        self.fx.checks([check_run("ci-gate")])
+
+        result = self.fx.run()
+
+        self.assert_pass(result)
+        self.assertIn(f"{REPO}#12 head={self.fx.head}", result.stdout)
+
     def test_a_step_that_changed_no_code_is_skipped_not_forced_to_open_a_pull_request(self) -> None:
         self.fx.git("checkout", "-q", "--detach", self.fx.base)
-        self.fx.route(f"repos/{REPO}/commits/{self.fx.base}/pulls?per_page=100", [self.fx.pull(number=3, head=self.fx.base, state="closed")])
+        self.fx.commit_pulls([self.fx.pull(number=3, head=self.fx.base, state="closed")], sha=self.fx.base)
         self.fx.route(f"repos/{REPO}/compare/main...{self.fx.base}", {"ahead_by": 0, "status": "identical"})
 
         self.assert_skipped(self.fx.run(), "nothing to publish")
@@ -311,7 +541,7 @@ class ImplementationHandoffTests(PrCiGreenTestCase):
         self.fx.checks([])
         self.fx.route(f"repos/{REPO}/actions/workflows?per_page=1", {"total_count": 0})
 
-        self.assert_skipped(self.fx.run(), f"{REPO} has no workflows")
+        self.assert_skipped(self.fx.run(), f"{REPO} has no workflows", loud=True)
 
     def test_more_than_one_open_pull_request_for_the_branch_fails(self) -> None:
         other = "2222222222222222222222222222222222222222"
@@ -319,21 +549,26 @@ class ImplementationHandoffTests(PrCiGreenTestCase):
 
         self.assert_fail(self.fx.run(), "more than one pull request", "#7", "#9")
 
-    def test_github_being_unreadable_is_a_failure_not_a_skip(self) -> None:
-        self.fx.route_error(
-            f"repos/{REPO}/commits/{self.fx.head}/check-runs?filter=latest&per_page=100&page=1",
-            "gh: Server Error (HTTP 502)",
-        )
-
-        self.assert_fail(self.fx.run(), "GitHub could not be read", "HTTP 502", "the gate does not pass")
-
     def test_long_failure_lists_are_capped_for_the_attempt_log(self) -> None:
-        self.fx.checks([check_run(f"job-{index:02d}", conclusion="failure") for index in range(30)])
+        self.fx.checks([check_run("ci-gate")] + [check_run(f"job-{index:02d}", conclusion="failure") for index in range(30)])
 
         result = self.fx.run()
 
-        self.assert_fail(result, "30 failed", "FAILED  job-24", "... and 5 more")
+        self.assert_fail(result, "30 failed, 0 unfinished, of 31 checks", "FAILED  job-24", "... and 5 more", "gc.failure_class=hard")
         self.assertNotIn("job-25", result.stderr)
+        self.assertLess(len(result.stderr.encode("utf-8")), 4096)
+
+    def test_long_check_names_and_urls_still_leave_room_for_the_advice(self) -> None:
+        runs = []
+        for index in range(30):
+            run = check_run(f"visual-regression shard {index:02d} " + "x" * 60, conclusion="failure")
+            run["html_url"] = f"https://github.com/{REPO}/actions/runs/36886252649/job/1104507169{index:02d}"
+            runs.append(run)
+        self.fx.checks([check_run("ci-gate"), *runs])
+
+        result = self.fx.run()
+
+        self.assert_fail(result, "30 failed", "more", "gc.failure_class=hard")
         self.assertLess(len(result.stderr.encode("utf-8")), 4096)
 
     def test_closed_source_anchor_hands_over_its_recorded_commit(self) -> None:
@@ -341,6 +576,297 @@ class ImplementationHandoffTests(PrCiGreenTestCase):
         self.fx.checks([check_run("ci-gate")])
 
         self.assert_pass(self.fx.run())
+
+
+class BaseBranchAlsoRedTests(PrCiGreenTestCase):
+    """A worker fixes what its branch broke, not what the base branch already has.
+
+    A red check passes, with a warning, only when the base branch does not
+    require it AND the base branch's own last result for it is red too.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.fx.implementation_item()
+        self.fx.pulls([self.fx.pull()])
+        self.red = check_run("build (24.x)", conclusion="failure")
+        self.fx.checks([check_run("ci-gate"), self.red])
+
+    def test_not_required_and_red_on_the_base_head_passes_with_a_warning_naming_both_runs(self) -> None:
+        theirs = base_run("build (24.x)", "failure")
+        self.fx.base_checks([base_run("ci-gate"), theirs])
+
+        result = self.fx.run()
+
+        self.assert_pass(result)
+        warning = next(line for line in result.stdout.splitlines() if "WARNING" in line)
+        for fragment in (
+            f"{REPO}#7: check 'build (24.x)' is red on this commit (failure) {self.red['html_url']}",
+            f"also red on main at {self.fx.base[:12]} (failure) {theirs['html_url']}",
+            "It is not a required check of main, so it does not block",
+            "do not fix main's failure on this branch",
+        ):
+            self.assertIn(fragment, warning)
+        self.assertIn("checks=2 (passed 1, skipped 0, red but also red on main 1: build (24.x))", result.stdout)
+        recorded = self.fx.recorded_results()
+        self.assertEqual(len(recorded), 1)
+        self.assertIn("gc.build.ci_gate_result=PASS", recorded[0])
+        self.assertIn(self.red["html_url"], recorded[0])
+        self.assertIn(theirs["html_url"], recorded[0])
+
+    def test_not_required_but_green_on_the_base_head_blocks(self) -> None:
+        self.fx.base_checks([base_run("ci-gate"), base_run("build (24.x)")])
+
+        result = self.fx.run()
+
+        self.assert_fail(
+            result,
+            "1 failed, 0 unfinished, of 2 checks",
+            f"FAILED  build (24.x) (failure) {self.red['html_url']} [main: green at {self.fx.base[:12]}]",
+        )
+        self.assertNotIn("WARNING", result.stdout + result.stderr)
+        self.assertEqual(self.fx.recorded_results(), [])
+
+    def test_not_required_and_never_run_on_the_base_branch_blocks(self) -> None:
+        self.fx.base_history([OLDER_1])
+        self.fx.base_checks([base_run("ci-gate")], sha=OLDER_1)
+
+        result = self.fx.run()
+
+        self.assert_fail(
+            result,
+            f"FAILED  build (24.x) (failure) {self.red['html_url']} [main: no result]",
+            "'main: no result' means main has no completed run of that check on its head or the 10 commits before it",
+        )
+
+    def test_required_and_red_on_the_base_head_still_blocks(self) -> None:
+        self.fx.base_branch(required=["ci-gate", "build (24.x)"])
+        self.fx.base_checks([base_run("ci-gate"), base_run("build (24.x)", "failure")])
+
+        self.assert_fail(self.fx.run(), f"FAILED  build (24.x) (failure) {self.red['html_url']} [required by main]")
+
+    def test_required_by_a_ruleset_and_red_on_the_base_head_still_blocks(self) -> None:
+        self.fx.base_branch(
+            required=["ci-gate"],
+            rulesets=[{"type": "required_status_checks", "parameters": {"required_status_checks": [{"context": "build (24.x)"}]}}],
+        )
+        self.fx.base_checks([base_run("ci-gate"), base_run("build (24.x)", "failure")])
+
+        self.assert_fail(self.fx.run(), "[required by main]")
+
+    def test_unreadable_branch_protection_makes_every_check_required(self) -> None:
+        theirs = base_run("build (24.x)", "failure")
+        for name, arrange in (
+            ("protection hidden", lambda: self.fx.base_branch(required=None)),
+            (
+                "branch refused",
+                lambda: self.fx.route_error(f"repos/{REPO}/branches/main", "gh: Resource not accessible by integration (HTTP 403)"),
+            ),
+            (
+                "rulesets refused",
+                lambda: self.fx.route_error(
+                    f"repos/{REPO}/rules/branches/main?per_page=100", "gh: Resource not accessible by integration (HTTP 403)"
+                ),
+            ),
+        ):
+            with self.subTest(name):
+                self.fx.base_branch(required=["ci-gate"])
+                self.fx.base_checks([base_run("ci-gate"), theirs])
+                arrange()
+
+                result = self.fx.run()
+
+                self.assert_fail(
+                    result,
+                    f"FAILED  build (24.x) (failure) {self.red['html_url']} [counted as required]",
+                    "Every check counts as required here because",
+                )
+                self.assertNotIn("WARNING", result.stdout + result.stderr)
+
+    def test_an_unprotected_base_branch_requires_nothing(self) -> None:
+        self.fx.base_branch(required=None, protected=False)
+        self.fx.base_checks([base_run("build (24.x)", "failure")])
+
+        result = self.fx.run()
+
+        self.assert_pass(result)
+        self.assertIn("WARNING", result.stdout)
+
+    def test_a_check_that_did_not_run_on_the_base_head_is_judged_by_the_base_branch_s_last_run_of_it(self) -> None:
+        # A path-filtered job runs only on some base commits. The head has no
+        # run of it and the commit before has an unfinished one; the newest
+        # completed result on main decides.
+        self.fx.base_history([OLDER_1, OLDER_2])
+        self.fx.base_checks([base_run("ci-gate"), base_run("build (24.x)", status="in_progress")], sha=OLDER_1)
+        theirs = base_run("build (24.x)", "failure")
+        self.fx.base_checks([base_run("ci-gate"), theirs], sha=OLDER_2)
+
+        result = self.fx.run()
+
+        self.assert_pass(result)
+        self.assertIn(f"also red on main at {OLDER_2[:12]} (failure) {theirs['html_url']}", result.stdout)
+
+    def test_a_base_branch_that_has_since_gone_green_blocks(self) -> None:
+        self.fx.base_history([OLDER_1, OLDER_2])
+        self.fx.base_checks([base_run("ci-gate"), base_run("build (24.x)")], sha=OLDER_1)
+        self.fx.base_checks([base_run("ci-gate"), base_run("build (24.x)", "failure")], sha=OLDER_2)
+
+        self.assert_fail(self.fx.run(), f"[main: green at {OLDER_1[:12]}]")
+        self.assertFalse(any(OLDER_2 in call for call in self.fx.gh_calls()), "stopped at the newest result")
+
+    def test_lookback_zero_judges_by_the_base_head_alone(self) -> None:
+        self.fx.base_history([OLDER_1])
+        self.fx.base_checks([base_run("build (24.x)", "failure")], sha=OLDER_1)
+
+        result = self.fx.run(env={"PR_CI_GREEN_BASE_LOOKBACK": "0"})
+
+        self.assert_fail(result, "[main: no result]")
+        self.assertFalse(any(OLDER_1 in call for call in self.fx.gh_calls()))
+
+    def test_a_tolerated_red_check_does_not_hide_one_this_branch_broke(self) -> None:
+        mine = check_run("lint", conclusion="failure")
+        self.fx.checks([check_run("ci-gate"), self.red, mine])
+        self.fx.base_checks([base_run("ci-gate"), base_run("build (24.x)", "failure"), base_run("lint")])
+
+        result = self.fx.run()
+
+        self.assert_fail(
+            result,
+            "1 failed, 0 unfinished, of 3 checks",
+            f"FAILED  lint (failure) {mine['html_url']} [main: green at {self.fx.base[:12]}]",
+            f"(not blocking: build (24.x) is also red on main at {self.fx.base[:12]})",
+        )
+
+    def test_a_failed_commit_status_that_is_also_red_on_the_base_head_passes_with_a_warning(self) -> None:
+        self.fx.checks(
+            [check_run("ci-gate")],
+            statuses=[{"context": "coverage/project", "state": "failure", "target_url": "https://example.test/cov/pr"}],
+        )
+        self.fx.base_checks(
+            [base_run("ci-gate")],
+            statuses=[{"context": "coverage/project", "state": "error", "target_url": "https://example.test/cov/main"}],
+        )
+
+        result = self.fx.run()
+
+        self.assert_pass(result)
+        self.assertIn("https://example.test/cov/pr", result.stdout)
+        self.assertIn("https://example.test/cov/main", result.stdout)
+
+
+class InfrastructureErrorTests(PrCiGreenTestCase):
+    """An error that says nothing about the commit is retried and never counted as red."""
+
+    SHORT = {"PR_CI_GREEN_INFRA_BUDGET_SECONDS": "1"}
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.fx.implementation_item()
+        self.fx.pulls([self.fx.pull()])
+        self.fx.checks([check_run("ci-gate")])
+
+    def test_a_rate_limit_that_clears_is_retried_to_a_verdict(self) -> None:
+        self.fx.route_error(self.fx.check_runs_path(), RATE_LIMITED, times=2)
+
+        result = self.fx.run()
+
+        self.assert_pass(result)
+        self.assertEqual(sum(1 for call in self.fx.gh_calls() if "check-runs" in call and self.fx.head in call), 3)
+        self.assertIn("pr-ci-green: INFRA GitHub", result.stderr)
+        self.assertIn("HTTP 403", result.stderr)
+        self.assertIn("without counting a failed attempt", result.stderr)
+
+    def test_a_rate_limit_that_does_not_clear_is_no_verdict_not_a_failed_attempt(self) -> None:
+        for message in (RATE_LIMITED, "gh: You have exceeded a secondary rate limit. (HTTP 403)", "gh: Too Many Requests (HTTP 429)"):
+            with self.subTest(message=message):
+                self.fx.route_error(self.fx.check_runs_path(), message)
+
+                result = self.fx.run(env=self.SHORT)
+
+                self.assert_no_verdict(result, "INFRA no verdict", "this is not a red check")
+                self.assertEqual(self.fx.recorded_results(), [])
+
+    def test_a_server_error_or_a_network_error_is_no_verdict(self) -> None:
+        for message in ("gh: Server Error (HTTP 502)", "gh: Service Unavailable (HTTP 503)", "dial tcp: lookup api.github.com: no such host"):
+            with self.subTest(message=message):
+                self.fx.route_error(self.fx.check_runs_path(), message)
+
+                self.assert_no_verdict(self.fx.run(env=self.SHORT), message.removeprefix("gh: "))
+
+    def test_a_permission_refusal_is_a_failure_not_a_retry(self) -> None:
+        self.fx.route_error(self.fx.check_runs_path(), "gh: Resource not accessible by integration (HTTP 403)")
+
+        result = self.fx.run()
+
+        self.assert_fail(result, "GitHub refused", "HTTP 403", "the gate does not pass")
+        self.assertEqual(sum(1 for call in self.fx.gh_calls() if "check-runs" in call), 1)
+
+    def test_rejected_credentials_are_a_loud_skip(self) -> None:
+        self.fx.route_error(self.fx.check_runs_path(), "gh: Bad credentials (HTTP 401)")
+
+        self.assert_skipped(self.fx.run(), "GitHub rejected gh's credentials (HTTP 401)", loud=True)
+
+    def test_under_the_controller_the_gate_outlasts_the_check_timeout_instead_of_exiting(self) -> None:
+        # The dispatcher counts any exit code as a failed attempt and only a
+        # check still running at its timeout as "could not run". With
+        # GC_ITERATION set (the controller's environment) the default budget
+        # is longer than the check timeout; the reason is already on stderr
+        # when the timeout ends the process.
+        self.fx.route_error(self.fx.check_runs_path(), "gh: Server Error (HTTP 502)")
+        env = {"GC_ITERATION": "1"}
+
+        with self.assertRaises(subprocess.TimeoutExpired) as caught:
+            self.fx.run(env={**env, "PR_CI_GREEN_INFRA_BUDGET_SECONDS": ""}, timeout=10)
+
+        stderr = caught.exception.stderr or b""
+        stderr = stderr.decode("utf-8") if isinstance(stderr, bytes) else stderr
+        self.assertIn("pr-ci-green: INFRA GitHub", stderr)
+        self.assertIn("HTTP 502", stderr)
+        self.assertNotIn("FAIL", stderr)
+
+    def test_default_budget_under_the_controller_is_longer_than_the_check_timeout(self) -> None:
+        program = (
+            "import importlib.util, sys;"
+            "spec = importlib.util.spec_from_file_location('gate', sys.argv[1]);"
+            "gate = importlib.util.module_from_spec(spec); spec.loader.exec_module(gate);"
+            "print(gate.UNDER_CONTROLLER, gate.INFRA_BUDGET_SECONDS, gate.CONTROLLER_CHECK_TIMEOUT_SECONDS)"
+        )
+        gate = str(PACK_ROOT / "assets" / "scripts" / "pr_ci_green.py")
+        clean = {key: value for key, value in os.environ.items() if not key.startswith(("PR_CI_GREEN_", "GC_ITERATION"))}
+
+        controller = subprocess.run(
+            ["python3", "-c", program, gate], env={**clean, "GC_ITERATION": "2"}, capture_output=True, text=True, check=True
+        ).stdout.split()
+        by_hand = subprocess.run(["python3", "-c", program, gate], env=clean, capture_output=True, text=True, check=True).stdout.split()
+
+        self.assertEqual(controller[0], "True")
+        self.assertEqual(float(controller[2]), 300.0)  # the "5m" the formulas declare for this check
+        self.assertGreater(float(controller[1]), float(controller[2]))
+        self.assertEqual(by_hand[0], "False")
+        self.assertLess(float(by_hand[1]), 120.0)
+
+    def test_a_bead_read_that_fails_and_recovers_reaches_a_verdict(self) -> None:
+        (self.fx.beads / "root.error").write_text("dolt circuit breaker is open\n", encoding="utf-8")
+        (self.fx.beads / "root.flaky").write_text("2", encoding="utf-8")
+
+        result = self.fx.run()
+
+        self.assert_pass(result)
+        self.assertIn("pr-ci-green: INFRA gc bd show root failed: dolt circuit breaker is open", result.stderr)
+
+    def test_a_bead_read_that_keeps_failing_is_no_verdict(self) -> None:
+        (self.fx.beads / "root.json").unlink()
+        (self.fx.beads / "root.error").write_text("events: lock timed out\n", encoding="utf-8")
+
+        result = self.fx.run(env=self.SHORT)
+
+        self.assert_no_verdict(result, "gc bd show root kept failing: events: lock timed out")
+        self.assertEqual(self.fx.gh_calls(), [])
+
+    def test_a_bead_that_does_not_exist_is_a_failure(self) -> None:
+        self.fx.bead("step", {"gc.root_bead_id": "gone"})
+
+        self.assert_fail(self.fx.run(), "bead gone does not exist")
 
 
 class PublishingIntentTests(PrCiGreenTestCase):
@@ -351,22 +877,49 @@ class PublishingIntentTests(PrCiGreenTestCase):
 
                 result = self.fx.run()
 
-                self.assert_skipped(result, "no publishing intent")
+                self.assert_skipped(result, "no publishing intent", loud=False)
                 self.assertIn(f"push={push or 'unset'} open_pr={open_pr or 'unset'}", result.stdout)
                 self.assertEqual(self.fx.gh_calls(), [])
 
     def test_no_publishing_intent_and_no_pull_request_skips(self) -> None:
         self.fx.implementation_item(push="false", open_pr="false")
         self.fx.pulls([])
+        self.fx.commit_pulls(None)
 
-        self.assert_skipped(self.fx.run(), f"no open pull request for branch {BRANCH}")
+        self.assert_skipped(self.fx.run(), f"no open pull request for branch {BRANCH}", loud=False)
 
     def test_an_existing_pull_request_is_checked_even_without_publishing_intent(self) -> None:
         self.fx.implementation_item(push="false", open_pr="false")
-        self.fx.pulls([self.fx.pull(draft=False)])
+        self.fx.pulls([self.fx.pull()])
         self.fx.checks([check_run("ci-gate", conclusion="failure")])
 
-        self.assert_fail(self.fx.run(), "FAILED  ci-gate (failure)")
+        result = self.fx.run()
+
+        self.assert_fail(result, "FAILED  ci-gate (failure)", "gc.outcome=fail and gc.failure_class=hard")
+        # The workflow was told not to push: the gate must not tell it to.
+        self.assertNotIn("push", result.stderr.lower())
+
+    def test_without_push_a_pull_request_at_another_commit_is_a_loud_skip_not_an_order_to_push(self) -> None:
+        other = "5555555555555555555555555555555555555555"
+        self.fx.implementation_item(push="false", open_pr="false")
+        self.fx.pulls([self.fx.pull(head=other)])
+
+        result = self.fx.run()
+
+        self.assert_skipped(result, f"handoff commit {self.fx.head[:12]} is local only", loud=True)
+        self.assertIn(f"{REPO}#7 is at {other[:12]}", result.stdout)
+        for stream in (result.stdout, result.stderr):
+            self.assertNotIn("push the", stream.lower())
+            self.assertNotIn("push it", stream.lower())
+        self.assertIn("gc.build.ci_gate_result=skipped: push=false open_pr=false", self.fx.recorded_results()[0])
+
+    def test_without_push_a_recorded_commit_that_is_not_the_worktree_head_is_not_told_to_push(self) -> None:
+        self.fx.implementation_item(push="false", open_pr="false", root_extra={"gc.build.handoff_commit": self.fx.base})
+
+        result = self.fx.run()
+
+        self.assert_fail(result, "gc.build.handoff_commit on root", "Record the commit that is actually handed over")
+        self.assertNotIn("push", result.stderr.lower())
 
     def test_publishing_intent_without_a_recorded_handoff_fails(self) -> None:
         self.fx.fix_loop()
@@ -379,13 +932,20 @@ class FixLoopHandoffTests(PrCiGreenTestCase):
 
     def test_recorded_commit_at_the_pull_request_head_with_green_checks_passes(self) -> None:
         self.fx.fix_loop(commit=self.fx.head, branch=BRANCH)
-        self.fx.pulls([self.fx.pull(draft=False)])
+        self.fx.pulls([self.fx.pull()])
         self.fx.checks([check_run("ci-gate")])
 
         result = self.fx.run()
 
         self.assert_pass(result)
-        self.assertIn("pr_state=open", result.stdout)
+        self.assertIn("pr_state=draft", result.stdout)
+
+    def test_a_pull_request_marked_ready_before_re_review_fails(self) -> None:
+        self.fx.fix_loop(commit=self.fx.head, branch=BRANCH)
+        self.fx.pulls([self.fx.pull(draft=False)])
+        self.fx.checks([check_run("ci-gate")])
+
+        self.assert_fail(self.fx.run(), "is marked ready for review", f"gh pr ready --undo 7 --repo {REPO}")
 
     def test_recorded_commit_behind_the_pull_request_head_fails(self) -> None:
         newer = "3333333333333333333333333333333333333333"
@@ -396,13 +956,18 @@ class FixLoopHandoffTests(PrCiGreenTestCase):
 
     def test_recorded_commit_without_a_branch_finds_the_pull_request_by_commit(self) -> None:
         self.fx.fix_loop(commit=self.fx.head)
-        self.fx.route(
-            f"repos/{REPO}/commits/{self.fx.head}/pulls?per_page=100",
-            [self.fx.pull(number=2, head=self.fx.head, state="closed"), self.fx.pull(number=7)],
-        )
+        self.fx.commit_pulls([self.fx.pull(number=2, head=self.fx.head, state="closed"), self.fx.pull(number=7)])
         self.fx.checks([check_run("ci-gate", status="in_progress", conclusion=None)])
 
         self.assert_fail(self.fx.run(), f"{REPO}#7 head {self.fx.head[:12]}", "PENDING ci-gate")
+
+    def test_recorded_branch_that_has_no_pull_request_falls_back_to_the_commit(self) -> None:
+        self.fx.fix_loop(commit=self.fx.head, branch="local-name-only")
+        self.fx.pulls([], branch="local-name-only")
+        self.fx.commit_pulls([self.fx.pull(number=7)])
+        self.fx.checks([check_run("ci-gate")])
+
+        self.assert_pass(self.fx.run())
 
     def test_recorded_value_that_is_not_a_sha_fails(self) -> None:
         self.fx.fix_loop(commit="HEAD", branch=BRANCH)
@@ -422,26 +987,46 @@ class EnvironmentTests(PrCiGreenTestCase):
 
         result = self.fx.run()
 
-        self.assert_skipped(result, "origin is not a github.com remote")
-        self.assertNotIn("secret", result.stdout)
+        self.assert_skipped(result, "origin is not a github.com remote", loud=True)
+        self.assertNotIn("secret", result.stdout + result.stderr)
         self.assertEqual(self.fx.gh_calls(), [])
+
+    def test_an_ssh_host_alias_remote_is_skipped_loudly_when_the_workflow_publishes(self) -> None:
+        self.fx.git("remote", "set-url", "origin", f"git@github-work:{REPO}.git")
+
+        result = self.fx.run()
+
+        self.assert_skipped(result, "an SSH host alias for github.com is not recognised", loud=True)
+        self.assertIn("push=true open_pr=true", result.stderr)
+        recorded = self.fx.recorded_results()
+        self.assertEqual(len(recorded), 1)
+        self.assertIn("root --set-metadata gc.build.ci_gate_result=skipped: origin is not a github.com remote", recorded[0])
+
+    def test_the_same_skip_without_publishing_intent_is_quiet(self) -> None:
+        self.fx.implementation_item(push="false", open_pr="false")
+        self.fx.git("remote", "set-url", "origin", f"git@github-work:{REPO}.git")
+
+        self.assert_skipped(self.fx.run(), "origin is not a github.com remote", loud=False)
 
     def test_repository_without_a_remote_is_an_explicit_skip(self) -> None:
         self.fx.git("remote", "remove", "origin")
 
-        self.assert_skipped(self.fx.run(), "no git origin remote")
+        self.assert_skipped(self.fx.run(), "no git origin remote", loud=True)
 
     def test_missing_gh_is_an_explicit_skip(self) -> None:
         (self.fx.bin / "gh").unlink()
 
         result = self.fx.run(path=f"{self.fx.bin}:/usr/bin:/bin", env={"PR_CI_GREEN_GH_FALLBACK_PATHS": ""})
 
-        self.assert_skipped(result, "gh is not installed")
+        self.assert_skipped(result, "gh is not installed", loud=True)
 
-    def test_signed_out_gh_is_an_explicit_skip(self) -> None:
+    def test_signed_out_gh_is_a_skip_said_on_stderr_and_recorded_when_the_workflow_publishes(self) -> None:
         (self.fx.gh_dir / "signed-out").write_text("", encoding="utf-8")
 
-        self.assert_skipped(self.fx.run(), "gh is not signed in")
+        result = self.fx.run()
+
+        self.assert_skipped(result, "gh is not signed in", loud=True)
+        self.assertIn("gc.build.ci_gate_result=skipped: gh is not signed in", self.fx.recorded_results()[0])
 
     def test_controller_sandbox_home_falls_back_to_the_account_home_for_gh(self) -> None:
         # The controller runs checks with HOME set to the city, where gh has no
@@ -470,6 +1055,15 @@ class ManualModeTests(PrCiGreenTestCase):
 
         self.assert_pass(self.fx.run("--repo", REPO, "--pr", "7", bead=None))
 
+    def test_manual_mode_does_not_require_a_draft(self) -> None:
+        self.fx.route(f"repos/{REPO}/pulls/7", self.fx.pull(draft=False))
+        self.fx.checks([check_run("ci-gate")])
+
+        result = self.fx.run("--repo", REPO, "--pr", "7", bead=None)
+
+        self.assert_pass(result)
+        self.assertIn("pr_state=open", result.stdout)
+
     def test_merged_pull_request_needs_any_state(self) -> None:
         self.fx.route(f"repos/{REPO}/pulls/7", self.fx.pull(state="closed", draft=False))
         self.fx.checks([check_run("ci-gate")])
@@ -480,11 +1074,48 @@ class ManualModeTests(PrCiGreenTestCase):
     def test_any_state_inspects_an_older_head_of_the_pull_request(self) -> None:
         older = "4444444444444444444444444444444444444444"
         self.fx.route(f"repos/{REPO}/pulls/7", self.fx.pull(state="closed", draft=False))
-        self.fx.checks([check_run("build (24.x)", conclusion="failure")], sha=older)
+        self.fx.checks([check_run("ci-gate"), check_run("build (24.x)", conclusion="failure")], sha=older)
 
         result = self.fx.run("--repo", REPO, "--pr", "7", "--commit", older, "--any-state", bead=None)
 
         self.assert_fail(result, f"head {older[:12]}: 1 failed", "FAILED  build (24.x) (failure)")
+
+    def test_commit_with_any_state_inspects_a_commit_of_a_merged_pull_request_that_is_not_its_head(self) -> None:
+        # The merge commit of a merged pull request, or one of its older pushes.
+        merge = "6666666666666666666666666666666666666666"
+        self.fx.commit_pulls([self.fx.pull(state="closed", draft=False)], sha=merge)
+        self.fx.checks([check_run("ci-gate")], sha=merge)
+
+        result = self.fx.run("--repo", REPO, "--commit", merge, "--any-state", bead=None)
+
+        self.assert_pass(result)
+        self.assertIn(f"{REPO}#7 (commit given; the head is {self.fx.head[:12]}) head={merge}", result.stdout)
+
+    def test_commit_without_any_state_must_be_the_head_of_an_open_pull_request(self) -> None:
+        merge = "6666666666666666666666666666666666666666"
+        self.fx.commit_pulls([self.fx.pull(state="closed", draft=False)], sha=merge)
+
+        self.assert_fail(self.fx.run("--repo", REPO, "--commit", merge, bead=None), f"no open pull request contains commit {merge[:12]}")
+
+    def test_a_short_sha_is_resolved_before_the_workflow_runs_are_listed(self) -> None:
+        self.fx.route(f"repos/{REPO}/commits/{self.fx.head[:9]}", {"sha": self.fx.head})
+        self.fx.commit_pulls([self.fx.pull(state="closed", draft=False)])
+        self.fx.checks([check_run("ci-gate")])
+
+        result = self.fx.run("--repo", REPO, "--commit", self.fx.head[:9], "--any-state", bead=None)
+
+        self.assert_pass(result)
+        self.assertTrue(any(f"actions/runs?head_sha={self.fx.head}&" in call for call in self.fx.gh_calls()))
+
+    def test_commit_with_any_state_and_no_pull_request_is_judged_against_the_default_branch(self) -> None:
+        lone = "7777777777777777777777777777777777777777"
+        self.fx.commit_pulls([], sha=lone)
+        self.fx.checks([check_run("ci-gate")], sha=lone)
+
+        result = self.fx.run("--repo", REPO, "--commit", lone, "--any-state", bead=None)
+
+        self.assert_pass(result)
+        self.assertIn(f"{REPO} commit head={lone}", result.stdout)
 
 
 class ImplementationHandoffChainTests(PrCiGreenTestCase):
@@ -554,11 +1185,21 @@ class ImplementationHandoffChainTests(PrCiGreenTestCase):
     def test_workflow_that_does_not_publish_passes_on_the_artifact_alone(self) -> None:
         self.item(push="false", open_pr="false")
         self.fx.pulls([])
+        self.fx.commit_pulls(None)
 
         result = self.fx.run(script=HANDOFF_SCRIPT)
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("pr-ci-green: skipped: no publishing intent", result.stdout)
+
+    def test_no_verdict_from_the_ci_gate_is_passed_through_not_turned_into_a_failure(self) -> None:
+        self.fx.checks([check_run("ci-gate")])
+        self.fx.route_error(self.fx.check_runs_path(), "gh: Server Error (HTTP 502)")
+
+        result = self.fx.run(script=HANDOFF_SCRIPT, env={"PR_CI_GREEN_INFRA_BUDGET_SECONDS": "1"})
+
+        self.assertEqual(result.returncode, NO_VERDICT, result.stdout + result.stderr)
+        self.assertIn("pr-ci-green: INFRA", result.stderr)
 
 
 if __name__ == "__main__":

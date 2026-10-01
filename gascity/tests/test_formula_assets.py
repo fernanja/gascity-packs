@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import pathlib
@@ -256,6 +257,16 @@ CI_GREEN_HANDOFF_STEPS = {
     ("do-work-item", "implement-item"): ("implementation-handoff-valid.sh", "do-work-item/implement-item.md"),
     ("fix-loop-base", "apply-fixes"): ("pr-ci-green.sh", "fix-loop-base/apply-fixes.md"),
 }
+# `gh` ignores SIGALRM, so the wrapper forks and terminates it (GNU timeout is
+# not installed on macOS).
+BOUNDED_CI_WAIT_COMMAND = (
+    "`perl -e '$t=shift; $p=fork; exec @ARGV unless $p; $SIG{ALRM}=sub{kill \"TERM\",$p; exit 124}; "
+    "alarm $t; waitpid $p,0; exit $?>>8' 1500 gh pr checks <number> --watch --interval 30`"
+)
+HARD_FAILURE_CLOSE_COMMAND = (
+    '`gc bd update "<claimed-step-id>" --set-metadata gc.outcome=fail --set-metadata gc.failure_class=hard '
+    '--set-metadata "gc.failure_reason='
+)
 MANUAL_PR_CI_GREEN_COMMAND = (
     "GC_BEAD_ID=<claimed-step-id> "
     '"$(gc formula list --json | python3 -c \'import json,os,sys; c=[os.path.join(os.path.dirname(p),"assets/scripts/checks/pr-ci-green.sh") for p in json.load(sys.stdin)["search_paths"]]; print([p for p in c if os.path.isfile(p)][-1])\')"'
@@ -2086,7 +2097,10 @@ class FormulaAssetTests(unittest.TestCase):
                     "When push or open_pr is not `true`, do not open a pull request",
                 ):
                     self.assertIn(fragment, text)
-                self.assertNotIn("gh pr ready", text)
+                # The only `gh pr ready` an implementation step is told about
+                # is the one that makes a ready pull request a draft again.
+                self.assertIn("`gh pr ready --undo <number>` makes", text)
+                self.assertEqual(text.count("gh pr ready"), text.count("gh pr ready --undo"))
                 self.assertNotIn("draft or otherwise", text)
 
     def test_handoff_steps_are_gated_on_green_ci(self) -> None:
@@ -2108,30 +2122,55 @@ class FormulaAssetTests(unittest.TestCase):
                 for fragment in (
                     "gc-68exu",
                     "push {{push}} and open_pr {{open_pr}}",
-                    "`gh pr checks <number> --watch`",
-                    "The command returns by itself when the checks finish",
+                    # The wait is bounded, and a stuck check has a way out.
+                    BOUNDED_CI_WAIT_COMMAND,
+                    "the wrapper ends it after 25 minutes (status 124)",
+                    "a bare `alarm` before `exec` does not stop `gh`",
                     "Do not replace it with a fixed sleep or a long poll interval",
+                    "A check that is running gets another bounded wait, three waits at most.",
+                    "is stuck: do not wait again",
                     "you may rerun the failed job once (`gh run rerun <run-id> --failed`) and must record",
                     "The gate does not tell a flake from a defect: a check that is still red is red.",
                     MANUAL_PR_CI_GREEN_COMMAND,
                     "../assets/scripts/checks/pr-ci-green.sh",
                     "controller does not wait for CI.",
                     "skipped: no publishing intent",
-                    # Fix-in-place stays: the handoff text offers no way
-                    # around a failing test, pre-existing or not.
-                    "A failing test is fixed; it is never skipped, quarantined or re-baselined away, "
-                    "and that includes a test that was already failing before",
+                    # The worker fixes what its branch broke, and never by
+                    # weakening a test.
+                    "A failing test is fixed; it is never skipped, quarantined or re-baselined away.",
+                    # A failure the base branch also has is reported with the
+                    # evidence: not fixed on this branch, not ignored.
+                    "when the same check is red on the base branch's own most recent run of it, "
+                    "and the base branch does not require that check, the gate lets it pass and prints a `WARNING` line naming both runs",
+                    "Do not fix the base branch's failure on this branch, and do not pass over it in silence",
+                    "copy that `WARNING` line, with both run URLs, into",
+                    "The gate makes this call, not you: a red check that the base branch requires, "
+                    "that is green on the base branch, or that the base branch has never run, blocks.",
+                    # The honest exit when CI cannot be made green.
+                    "If CI cannot be made green:",
+                    "do not weaken, skip or re-baseline a test",
+                    HARD_FAILURE_CLOSE_COMMAND,
+                    "`gc.failure_class=hard` ends the step at once",
+                    "a failed outcome without it is handed back as a new attempt, up to three times",
+                    # A ready pull request fails the gate; infrastructure does
+                    # not count as an attempt.
+                    "marked ready instead of draft (`gh pr ready --undo <number>` makes it a draft again)",
+                    "GitHub or the bead store being unreachable is not an attempt",
                 ):
                     self.assertIn(fragment, text, f"{doc} lost: {fragment}")
+                self.assertNotIn("that includes a test that was already failing before", text)
+                self.assertNotIn("alarm shift; exec @ARGV", text)
 
         # The wrapper really chains both gates, artifact first.
         wrapper = (root / "assets" / "scripts" / "checks" / "implementation-handoff-valid.sh").read_text(
             encoding="utf-8"
         )
+        # Exit codes pass through (75 is "no verdict", not a failed attempt).
         self.assertLess(
-            wrapper.index('"$SCRIPT_DIR/build-artifact-valid.sh" || exit 1'),
-            wrapper.index('"$SCRIPT_DIR/pr-ci-green.sh" || exit 1'),
+            wrapper.index('"$SCRIPT_DIR/build-artifact-valid.sh" || exit $?'),
+            wrapper.index('exec "$SCRIPT_DIR/pr-ci-green.sh"'),
         )
+        self.assertNotIn("|| exit 1", wrapper.split("SCRIPT_DIR=", 1)[1].split("done", 1)[1])
 
     def test_review_family_reaches_every_review_through_a_gated_handoff(self) -> None:
         # build-from-plan / -decompose / -convoy: the first review follows the
@@ -2165,9 +2204,16 @@ class FormulaAssetTests(unittest.TestCase):
             "Leave a draft a draft: marking it ready belongs exclusively to the\n   publish step.",
             "the re-review does not start",
             "run `git checkout --detach` in your own directory",
+            # A worktree with someone else's uncommitted work ends the step in
+            # one attempt; a plain failed outcome would be re-dispatched three
+            # times into the same worktree.
+            "Do not touch it. Close this step as a hard failure and name the path:",
+            '--set-metadata gc.failure_class=hard --set-metadata "gc.failure_reason=uncommitted work on <branch> in <path>"',
+            "Without `gc.failure_class=hard` the\n  step is handed back as a new attempt, up to three times",
         ):
             with self.subTest(fragment=fragment):
                 self.assertIn(fragment, apply_fixes)
+        self.assertNotIn("Close this step with a failed outcome", apply_fixes)
 
         # The build passes its publishing intent into the loop it launches.
         for formula_name in ("build-from-plan", "build-from-review"):
@@ -4934,7 +4980,11 @@ description = "Override sink that writes the base triage report contract."
         bead_id: str,
         extra_env: dict[str, str] | None = None,
         script_root: pathlib.Path | None = None,
+        bead_errors: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess:
+        """bead_errors: extra files for the fake store, `<id>.error` (what
+        `gc bd show <id>` prints when it fails) and `<id>.flaky` (how many
+        times it fails before it answers)."""
         root = pathlib.Path(__file__).resolve().parents[1]
         script = root / "assets" / "scripts" / "checks" / "build-artifact-valid.sh"
 
@@ -4971,18 +5021,29 @@ description = "Override sink that writes the base triage report contract."
                 "shift\n"
                 "case \"$1\" in\n"
                 "  version) exit 0 ;;\n"
-                "  show) cat \"$BD_SHOW_DIR/$2.json\" ;;\n"
+                "  show)\n"
+                "    if [ -f \"$BD_SHOW_DIR/$2.flaky\" ] && [ \"$(cat \"$BD_SHOW_DIR/$2.flaky\")\" -gt 0 ]; then\n"
+                "      echo $(( $(cat \"$BD_SHOW_DIR/$2.flaky\") - 1 )) >\"$BD_SHOW_DIR/$2.flaky\"\n"
+                "      cat \"$BD_SHOW_DIR/$2.error\" >&2; exit 1\n"
+                "    fi\n"
+                "    if [ -f \"$BD_SHOW_DIR/$2.json\" ]; then cat \"$BD_SHOW_DIR/$2.json\"; exit 0; fi\n"
+                "    if [ -f \"$BD_SHOW_DIR/$2.error\" ]; then cat \"$BD_SHOW_DIR/$2.error\" >&2; exit 1; fi\n"
+                "    echo \"Error fetching $2: no issue found matching \\\"$2\\\"\" >&2; exit 1 ;;\n"
                 "  *) exit 2 ;;\n"
                 "esac\n",
                 encoding="utf-8",
             )
             fake_gc.chmod(0o755)
+            for name, text in (bead_errors or {}).items():
+                (show_dir / name).write_text(text, encoding="utf-8")
 
             env = {
                 **os.environ,
                 "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
                 "BD_SHOW_DIR": str(show_dir),
                 "GC_BEAD_ID": bead_id,
+                "BUILD_ARTIFACT_RETRY_SLEEP_SECONDS": "0.05",
+                "BUILD_ARTIFACT_INFRA_BUDGET_SECONDS": "30",
                 **(extra_env or {}),
             }
             return subprocess.run(
@@ -5683,7 +5744,14 @@ description = "Override sink that writes the base triage report contract."
         requirements_text: str | None = COVERAGE_PERMIT_REQUIREMENTS,
         extra_beads: dict[str, str] | None = None,
         requirements_relative_to: str = "",
+        parent_root_metadata: dict[str, str] | None = None,
+        bead_errors: dict[str, str] | None = None,
+        extra_env: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess:
+        """root_metadata replaces the default requirements key on the step's
+        workflow root. parent_root_metadata adds the workflow that launched it
+        (root -> drain control bead `drain` -> `parent`); the placeholder
+        `<requirements>` in its values is the requirements file's path."""
         with tempfile.TemporaryDirectory() as artifact_dir:
             root_dir = pathlib.Path(artifact_dir)
             plan = root_dir / "implementation-plan.md"
@@ -5707,11 +5775,20 @@ description = "Override sink that writes the base triage report contract."
                 root_meta.update(root_metadata)
             beads = {
                 "loop": json.dumps([{"id": "loop", "metadata": step_meta}]),
-                "root": json.dumps([{"id": "root", "metadata": root_meta}]),
                 **(extra_beads or {}),
             }
-            extra_env = {"GC_RIG_ROOT": str(root_dir)} if requirements_relative_to else None
-            return self._run_build_artifact_check(beads, "loop", extra_env=extra_env)
+            if parent_root_metadata is not None:
+                root_meta["gc.drain_control_id"] = "drain"
+                parent_meta = {
+                    key: value.replace("<requirements>", str(requirements)) for key, value in parent_root_metadata.items()
+                }
+                beads.setdefault("drain", json.dumps([{"id": "drain", "metadata": {"gc.root_bead_id": "parent"}}]))
+                beads.setdefault("parent", json.dumps([{"id": "parent", "metadata": parent_meta}]))
+            beads.setdefault("root", json.dumps([{"id": "root", "metadata": root_meta}]))
+            env = {"GC_RIG_ROOT": str(root_dir)} if requirements_relative_to else {}
+            return self._run_build_artifact_check(
+                beads, "loop", extra_env={**env, **(extra_env or {})}, bead_errors=bead_errors
+            )
 
     def test_build_artifact_check_rejects_unpermitted_deferral_when_step_requires_permits(self) -> None:
         result = self._run_coverage_permit_check(coverage_permit_plan(None))
@@ -5729,7 +5806,8 @@ description = "Override sink that writes the base triage report contract."
 
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertIn("build artifact valid", result.stdout)
-                self.assertIn("permits=", result.stdout)
+                self.assertIn("requirements=", result.stdout)
+                self.assertIn("/requirements.md", result.stdout)
 
     def test_build_artifact_check_rejects_permit_that_is_not_in_the_requirements(self) -> None:
         result = self._run_coverage_permit_check(
@@ -5746,7 +5824,7 @@ description = "Override sink that writes the base triage report contract."
         result = self._run_coverage_permit_check(coverage_permit_plan(None), step_permits=None)
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertNotIn("permits=", result.stdout)
+        self.assertNotIn("requirements=", result.stdout)
 
     def test_build_artifact_check_fails_when_recorded_requirements_file_is_missing(self) -> None:
         result = self._run_coverage_permit_check(
@@ -5757,7 +5835,38 @@ description = "Override sink that writes the base triage report contract."
         self.assertIn("recorded at gc.var.requirements_path", result.stderr)
         self.assertIn("coverage permits cannot be checked", result.stderr)
 
-    def test_build_artifact_check_quotes_the_work_item_when_no_requirements_artifact_exists(self) -> None:
+    def test_build_artifact_check_finds_the_requirements_on_the_workflow_that_launched_the_item(self) -> None:
+        # build-basic and build-from-requirements write the requirements in
+        # their own requirements stage and record the path on THEIR root. The
+        # implementation item's root has no requirements key, so the gate used
+        # to compare the quote with the work item's text and reject a correct
+        # quote of requirements.md.
+        work_item = json.dumps([{"id": "item-1", "title": "Guard team-less items", "description": "Do the work."}])
+        for key in ("gc.build.requirements_path", "gc.var.requirements_path"):
+            with self.subTest(parent_key=key):
+                result = self._run_coverage_permit_check(
+                    coverage_permit_plan(COVERAGE_PERMIT_QUOTE),
+                    root_metadata={"gc.drain_member_id": "item-1"},
+                    parent_root_metadata={key: "<requirements>"},
+                    extra_beads={"item-1": work_item},
+                )
+
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("/requirements.md", result.stdout)
+
+        # The same walk rejects a quote that is not in the parent's requirements.
+        rejected = self._run_coverage_permit_check(
+            coverage_permit_plan("This criterion is out of scope for the item, says nobody."),
+            root_metadata={"gc.drain_member_id": "item-1"},
+            parent_root_metadata={"gc.build.requirements_path": "<requirements>"},
+            extra_beads={"item-1": work_item},
+        )
+        self.assertNotEqual(rejected.returncode, 0, rejected.stdout + rejected.stderr)
+        self.assertIn("permit text is not in the requirements artifact", rejected.stderr)
+
+    def test_build_artifact_check_never_checks_a_quote_against_the_work_item(self) -> None:
+        # No root records a requirements artifact. The work item happens to
+        # contain the quoted sentence; that must not make the permit valid.
         work_item = json.dumps(
             [
                 {
@@ -5767,26 +5876,89 @@ description = "Override sink that writes the base triage report contract."
                 }
             ]
         )
-        accepted = self._run_coverage_permit_check(
-            coverage_permit_plan(COVERAGE_PERMIT_QUOTE),
-            root_metadata={"gc.drain_member_id": "item-1"},
-            extra_beads={"item-1": work_item},
+        for name, parent in (("no parent workflow", None), ("parent records nothing", {"gc.var.push": "true"})):
+            with self.subTest(name):
+                result = self._run_coverage_permit_check(
+                    coverage_permit_plan(COVERAGE_PERMIT_QUOTE),
+                    root_metadata={"gc.drain_member_id": "item-1"},
+                    parent_root_metadata=parent,
+                    extra_beads={"item-1": work_item},
+                )
+
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("the requirements path could not be resolved", result.stderr)
+                self.assertIn("1 coverage entries are not 'covered' (AC-2)", result.stderr)
+                self.assertIn("records gc.build.requirements_path or gc.var.requirements_path", result.stderr)
+                top = "parent" if parent is not None else "root"
+                self.assertIn(
+                    f"gc bd update {top} --set-metadata gc.build.requirements_path=<absolute path to the requirements file>",
+                    result.stderr,
+                )
+                self.assertNotIn("work-item", result.stdout + result.stderr)
+
+    def test_build_artifact_check_without_requirements_passes_an_artifact_that_leaves_nothing_open(self) -> None:
+        # A bare implementation convoy has no requirements artifact. With every
+        # entry covered there is no quote to check and no id list to compare.
+        covered = (
+            coverage_permit_plan(None)
+            .replace("status: deferred\n      rationale: Observable only after merge.\n", "status: covered\n")
+            .replace("| AC-2 | deferred |", "| AC-2 | covered |")
         )
-        rejected = self._run_coverage_permit_check(
-            coverage_permit_plan("Nothing in the work item says this sentence at all."),
-            root_metadata={"gc.drain_member_id": "item-1"},
-            extra_beads={"item-1": work_item},
-        )
-        no_source = self._run_coverage_permit_check(
-            coverage_permit_plan(COVERAGE_PERMIT_QUOTE), root_metadata={}
+        result = self._run_coverage_permit_check(covered, root_metadata={})
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("requirements=unresolved", result.stdout)
+
+    def test_build_artifact_check_requires_every_id_the_requirements_define(self) -> None:
+        # The plan lists and covers AC-1 and AC-2 only; the requirements also
+        # define AC-3. The artifact agrees with itself and still fails.
+        requirements = COVERAGE_PERMIT_REQUIREMENTS + "- **AC-3 (post-merge, mayor):** the mayor records the deploy.\n"
+        result = self._run_coverage_permit_check(
+            coverage_permit_plan(COVERAGE_PERMIT_QUOTE), requirements_text=requirements
         )
 
-        self.assertEqual(accepted.returncode, 0, accepted.stdout + accepted.stderr)
-        self.assertIn("permits=work-item:item-1", accepted.stdout)
-        self.assertNotEqual(rejected.returncode, 0, rejected.stdout + rejected.stderr)
-        self.assertIn("permit text is not in the requirements artifact", rejected.stderr)
-        self.assertNotEqual(no_source.returncode, 0, no_source.stdout + no_source.stderr)
-        self.assertIn("no requirements artifact was supplied", no_source.stderr)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("every requirement id the requirements artifact defines", result.stderr)
+        self.assertIn("missing from", result.stderr)
+        self.assertIn("requirements.md: AC-3", result.stderr)
+
+    def test_build_artifact_check_rejects_a_permit_that_quotes_the_requirement_itself(self) -> None:
+        result = self._run_coverage_permit_check(coverage_permit_plan("after merge the alerts auto-close."[6:]))
+        # "merge the alerts auto-close." is in the requirements and hands nothing off.
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("does not hand the requirement off", result.stderr)
+
+    def test_build_artifact_check_retries_a_bead_read_and_reports_no_verdict_not_a_failed_artifact(self) -> None:
+        recovered = self._run_coverage_permit_check(
+            coverage_permit_plan(COVERAGE_PERMIT_QUOTE),
+            bead_errors={"root.error": "dolt circuit breaker is open\n", "root.flaky": "2"},
+        )
+        self.assertEqual(recovered.returncode, 0, recovered.stdout + recovered.stderr)
+        self.assertIn("build-artifact-check: INFRA gc bd show root failed: dolt circuit breaker is open", recovered.stderr)
+        self.assertIn("without counting a failed attempt", recovered.stderr)
+
+        down = self._run_coverage_permit_check(
+            coverage_permit_plan(COVERAGE_PERMIT_QUOTE),
+            bead_errors={"loop.error": "events: lock timed out\n", "loop.flaky": "100000"},
+            extra_env={"BUILD_ARTIFACT_INFRA_BUDGET_SECONDS": "1"},
+        )
+        self.assertEqual(down.returncode, 75, down.stdout + down.stderr)
+        self.assertIn("INFRA no verdict: gc bd show loop kept failing: events: lock timed out", down.stderr)
+        self.assertNotIn("failed validation", down.stderr)
+
+        # The parent workflow's beads are read through the same retry.
+        parent_down = self._run_coverage_permit_check(
+            coverage_permit_plan(COVERAGE_PERMIT_QUOTE),
+            root_metadata={},
+            parent_root_metadata={"gc.build.requirements_path": "<requirements>"},
+            bead_errors={"drain.error": "i/o timeout\n", "drain.flaky": "100000"},
+            extra_env={"BUILD_ARTIFACT_INFRA_BUDGET_SECONDS": "1"},
+        )
+        self.assertEqual(parent_down.returncode, 75, parent_down.stdout + parent_down.stderr)
+
+        missing = self._run_build_artifact_check({}, "gone")
+        self.assertEqual(missing.returncode, 1, missing.stdout + missing.stderr)
+        self.assertIn("bead gone does not exist", missing.stderr)
 
     def test_coverage_permit_stages_carry_the_switch_and_explain_the_rule(self) -> None:
         root = pathlib.Path(__file__).resolve().parents[1]
@@ -5802,9 +5974,22 @@ description = "Override sink that writes the base triage report contract."
                     pathlib.PurePosixPath(step["check"]["check"]["path"]).name,
                     {"build-artifact-valid.sh", "implementation-handoff-valid.sh"},
                 )
-                text = (root / "assets" / "workflows" / doc).read_text(encoding="utf-8")
-                for fragment in ("`permit`", "word for word", "gc-gdyaz", "`status: blocked`"):
+                text = " ".join((root / "assets" / "workflows" / doc).read_text(encoding="utf-8").split())
+                for fragment in (
+                    "`permit`",
+                    "word for word",
+                    "gc-gdyaz",
+                    "`status: blocked`",
+                    # Ids come from the requirements file, and a permit must
+                    # hand the requirement off.
+                    "`AC-1`, `SCOPE-2`, `REQ-3`",
+                    "hands the requirement off",
+                    '"out of scope"',
+                    "own statement",
+                    "is not a permit",
+                ):
                     self.assertIn(fragment, text, f"{doc} must explain coverage permits ({fragment})")
+                self.assertNotIn("the text of the work item", text)
 
         # No other producer stage enforces permits without telling its worker.
         for path in sorted((root / "formulas").glob("*.formula.toml")):
@@ -5829,6 +6014,36 @@ description = "Override sink that writes the base triage report contract."
                 self.assertIn(fragment, plan)
         self.assertIn("State hand-offs in the requirements themselves.", skill)
         self.assertIn("`permit`", skill)
+        self.assertIn("in words the build gate recognises", skill)
+        self.assertIn("the gate takes the ids from\nthe requirements file", skill)
+        # Every hand-off phrase the docs teach is one the validator accepts.
+        spec = importlib.util.spec_from_file_location(
+            "validate_build_artifact_for_docs", root / "assets" / "scripts" / "validate_build_artifact.py"
+        )
+        validator = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = validator  # dataclasses resolve the module by name
+        self.addCleanup(sys.modules.pop, spec.name, None)
+        spec.loader.exec_module(validator)
+        taught = {
+            "plan.md": (
+                " ".join(plan.split()),
+                ("post-merge", "after merge", "next round", "follow-up bead", "out of scope", "not in this work",
+                 "do not touch", "mayor-owned", "the mayor checks", "Jon's decision", "deferred", "blocked on"),
+            ),
+            "SKILL.md": (
+                " ".join(skill.split()),
+                ("post-merge", "after merge", "next round", "out of scope", "not in this work", "follow-up bead",
+                 "separate bead", "mayor-owned", "the mayor checks", "Jon's decision", "deferred"),
+            ),
+        }
+        for doc, (text, phrases) in taught.items():
+            for phrase in phrases:
+                with self.subTest(doc=doc, phrase=phrase):
+                    self.assertIn(f'"{phrase}"', text)
+                    self.assertTrue(validator.permit_cue(validator.normalize_permit_text(phrase)), phrase)
+        for phrase in validator.PERMIT_CUE_EXAMPLES.replace('"', "").split(", "):
+            with self.subTest(example=phrase):
+                self.assertTrue(validator.permit_cue(validator.normalize_permit_text(phrase)), phrase)
 
     def test_review_report_prompt_writes_to_the_rig_root(self) -> None:
         root = pathlib.Path(__file__).resolve().parents[1]

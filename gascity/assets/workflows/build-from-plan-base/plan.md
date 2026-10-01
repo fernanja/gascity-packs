@@ -23,11 +23,14 @@ modelling, and never skip verification.
 
 Account for every requirement. List each requirement and acceptance-criterion
 id of the requirements artifact under that artifact's `trace.upstream[].ids`,
-and give each a `trace.coverage` entry. `covered` means this plan delivers it
-and names how it is observed. Any other status (`deferred`, `blocked`,
-`out_of_scope`, `not_applicable`, `superseded`) needs, beside its `rationale`,
-a `permit`: the sentence in the requirements artifact that allows it, quoted
-word for word, at least 20 characters:
+and give each a `trace.coverage` entry. The gate reads the ids from
+`{{requirements_path}}` itself (labels such as `AC-1`, `SCOPE-2`, `REQ-3`,
+`OQ-4` or `CON-5` that lead a list item, a heading or a paragraph), so an id
+left out of both lists is rejected, not overlooked. `covered` means this plan
+delivers it and names how it is observed. Any other status (`deferred`,
+`blocked`, `out_of_scope`, `not_applicable`, `superseded`) needs, beside its
+`rationale`, a `permit`: the sentence in the requirements artifact that hands
+the requirement off, quoted word for word, at least 20 characters:
 
 ```yaml
 - id: AC-3
@@ -37,9 +40,15 @@ word for word, at least 20 characters:
 ```
 
 The gate checks each quote against `{{requirements_path}}` (ignoring line
-wrapping and Markdown emphasis) and rejects the plan when a permit is missing
-or its text is not there (gc-gdyaz: a plan postponed a required check with a
-footnote, was approved, and the gap cost a three-hour fix loop).
+wrapping, letter case and Markdown marks) and rejects the plan when a permit is
+missing, its text is not there, or the quoted text hands nothing off (gc-gdyaz:
+a plan postponed a required check with a footnote, was approved, and the gap
+cost a three-hour fix loop). The quote must itself say the requirement is for
+later, for someone else, or not for this work: "post-merge", "after merge",
+"next round", "follow-up bead", "out of scope", "not in this work", "do not
+touch", "mayor-owned", "the mayor checks", "Jon's decision", "deferred",
+"blocked on". A requirement's own statement is in the requirements too, and it
+is not a permit.
 
 - A criterion the requirements give to someone else or to a later moment (a
   post-merge check the mayor owns, a step the publish stage performs) is

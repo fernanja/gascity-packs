@@ -16,8 +16,11 @@ uncommitted fix was stashed away). Instead:
   `git -C "<path>" checkout --detach` (this changes no file there), then check
   the branch out in your own directory.
 - If it prints anything, that worktree holds uncommitted work on this branch.
-  Do not touch it. Close this step with a failed outcome and name the path in
-  the close reason.
+  Do not touch it. Close this step as a hard failure and name the path:
+  `gc bd update "<claimed-step-id>" --set-metadata gc.outcome=fail --set-metadata gc.failure_class=hard --set-metadata "gc.failure_reason=uncommitted work on <branch> in <path>"`,
+  then `gc bd close "<claimed-step-id>"`. Without `gc.failure_class=hard` the
+  step is handed back as a new attempt, up to three times, and each one finds
+  the same worktree.
 
 Hand the fix to re-review with green CI (gc-68exu). The launcher passes the
 build's publishing intent as push {{push}} and open_pr {{open_pr}}. When both
@@ -32,20 +35,36 @@ commit whose result is red or unknown:
    a **draft** against the default branch with the source bead id in the
    title. Leave a draft a draft: marking it ready belongs exclusively to the
    publish step.
-2. Wait for GitHub's checks on the pushed commit: `gh pr checks <number> --watch`.
-   The command returns by itself when the checks finish, so it is not a
-   blocking command of the kind the shell rules forbid. If your shell tool
-   limits how long one call may run, run it in the background and wait for it
-   to exit, or run it again until it returns by itself. Do not replace it with
-   a fixed sleep or a long poll interval: a fix worker once sat an hour past
-   the end of a run that way. If it says no checks are reported yet, CI has
-   not registered; wait a minute and run it again.
-3. A failed check is yours to fix in this pass. Read the failed job's log
-   (`gh run view <run-id> --log-failed`), fix the cause, commit, push, and
-   wait again. A failing test is fixed; it is never skipped, quarantined or
-   re-baselined away, and that includes a test that was already failing before
-   this branch. If the failure is in CI's own machinery (a runner that died, a
-   download that timed out), you may rerun the failed job once
+2. Wait for GitHub's checks on the pushed commit, with a bound:
+   `perl -e '$t=shift; $p=fork; exec @ARGV unless $p; $SIG{ALRM}=sub{kill "TERM",$p; exit 124}; alarm $t; waitpid $p,0; exit $?>>8' 1500 gh pr checks <number> --watch --interval 30`.
+   This `perl` wrapper is the time limit that works on macOS and Linux alike
+   (GNU `timeout` is not installed on macOS, and a bare `alarm` before `exec`
+   does not stop `gh`, which ignores that signal). The command returns by
+   itself when the checks finish (0: green, 1: a check failed) and the wrapper
+   ends it after 25 minutes (status 124), so it is not a blocking command of
+   the kind the shell rules forbid. If your shell tool allows less than that for one
+   call, pass a smaller number of seconds, or run it in the background and
+   wait for it to exit. Do not replace it with a fixed sleep or a long poll
+   interval: a fix worker once sat an hour past the end of a run that way. If it
+   says no checks are reported yet, CI has not registered; wait a minute and
+   run it again. When the wrapper ends the wait, run `gh pr checks <number>`
+   once and read what is unfinished. A check that is running gets another
+   bounded wait, three waits at most. A check that sat `queued` or `waiting`
+   through a whole wait is stuck: do not wait again, take the exit under "If
+   CI cannot be made green" below.
+3. A failed check is yours to fix, in this pass, when the branch under repair
+   broke it. Read the failed job's log (`gh run view <run-id> --log-failed`),
+   fix the cause, commit, push, and wait again. A failing test is fixed; it is
+   never skipped, quarantined or re-baselined away. A failure the base branch
+   also has is different: when the same check is red on the base branch's own
+   most recent run of it, and the base branch does not require that check, the
+   gate lets it pass and prints a `WARNING` line naming both runs. Do not fix
+   the base branch's failure on this branch, and do not pass over it in
+   silence: copy that `WARNING` line, with both run URLs, into the fix
+   summary. The gate makes this call, not you: a red check that the base
+   branch requires, that is green on the base branch, or that the base branch
+   has never run, blocks. If the failure is in CI's own machinery (a runner
+   that died, a download that timed out), you may rerun the failed job once
    (`gh run rerun <run-id> --failed`) and must record that you did, with the
    run URL and both results, in the fix summary. The gate does not tell a
    flake from a defect: a check that is still red is red.
@@ -58,15 +77,29 @@ commit whose result is red or unknown:
    It must print `PASS` for the commit you recorded. Put the pull request URL,
    the head sha and that `PASS` line in the fix summary.
 
+If CI cannot be made green: when a check your branch broke is still red after
+your fixes, a check is stuck, or the fix needs a decision that is not yours,
+do not close the step as passed, do not weaken, skip or re-baseline a test,
+and do not close it over and over to use up the attempts. Write what you found
+in the fix summary, then close the step as a hard failure that names each
+failing or stuck check with its URL:
+`gc bd update "<claimed-step-id>" --set-metadata gc.outcome=fail --set-metadata gc.failure_class=hard --set-metadata "gc.failure_reason=<check names and URLs>"`,
+then `gc bd close "<claimed-step-id>"`. `gc.failure_class=hard` ends the step
+at once and the re-review does not start; a failed outcome without it is handed back
+as a new attempt, up to three times.
+
 When push or open_pr is not `true` and the branch has no open pull request,
 skip this section; the gate records `skipped: no publishing intent` and passes.
 
 This step is gated by `../assets/scripts/checks/pr-ci-green.sh`. The
 controller does not wait for CI. A step closed while a check is unfinished or
-red, or with a recorded commit that is not the pull request head, fails the
-gate and comes back to you as a new attempt with the failing checks in
-`gc.attempt_log` on the gate's control bead (the dependent of this step
-bead); after three attempts the step fails and the re-review does not start.
+red, with a recorded commit that is not the pull request head, or while the
+pull request is marked ready instead of draft (`gh pr ready --undo <number>`
+makes it a draft again), fails the gate and comes back to you as a new attempt
+with the failing checks in `gc.attempt_log` on the gate's control bead (the
+dependent of this step bead); after three attempts the step fails and the
+re-review does not start. GitHub or the bead store being unreachable is not an
+attempt: the gate retries, and says `INFRA` rather than `FAIL`.
 
 Before closing this step, run `git checkout --detach` in your own directory so
 the branch is not left held by your slot for the next session that needs it.

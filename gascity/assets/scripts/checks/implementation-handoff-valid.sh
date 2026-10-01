@@ -23,5 +23,9 @@ for gate in build-artifact-valid.sh pr-ci-green.sh; do
   }
 done
 
-"$SCRIPT_DIR/build-artifact-valid.sh" || exit 1
-"$SCRIPT_DIR/pr-ci-green.sh" || exit 1
+# Exit codes pass through unchanged: 75 from either gate means "no verdict"
+# (an infrastructure error), not a failed artifact or a red check. The last
+# gate replaces this shell, so a check timeout ends the gate itself rather
+# than leaving it running behind a dead wrapper.
+"$SCRIPT_DIR/build-artifact-valid.sh" || exit $?
+exec "$SCRIPT_DIR/pr-ci-green.sh"

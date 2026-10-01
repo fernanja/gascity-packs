@@ -541,6 +541,7 @@ class CoveragePermitTests(unittest.TestCase):
         self.assertIn("trace.coverage[AC-3]", message)
         self.assertIn("permit text is not in the requirements artifact (requirements.md)", message)
         self.assertIn(invented, message)
+        self.assertIn("status: blocked", message)
 
     def test_permit_match_ignores_wrapping_emphasis_and_typographic_marks(self) -> None:
         # The requirements wrap the sentence, emphasise a word and use a curly
@@ -548,10 +549,101 @@ class CoveragePermitTests(unittest.TestCase):
         for permit in (
             "The mayor checks this post-merge;   it is not a\n worker AC.",
             "Repairing production rows is Jon's decision - the database is never edited directly.",
-            "`make preflight-fast` exits 0 and the pull request's checks are green.",
+            "the MAYOR checks this Post-Merge; it is not a worker ac.",
+            "...the mayor checks this post-merge; it is not a worker AC…",
         ):
             with self.subTest(permit=permit):
                 self.validate(self.artifact(ac3_status="deferred", permit=permit))
+
+    def test_permit_match_folds_links_tables_list_markers_and_ellipses(self) -> None:
+        requirements = (
+            "# Requirements\n\n"
+            "- **AC-1:** one.\n- **AC-2:** two.\n- **AC-3:** three.\n\n"
+            "## Hand-offs\n\n"
+            "1. [x] The [bundle republish](https://example.test/contract#14) is _mayor-owned_ \u2026 workers have no access.\n"
+            "* Screenshots are **Out of Scope** for this work.\n\n"
+            "| Item | Disposition |\n| --- | --- |\n| 143 | `MetricTile` sizing is deferred to the next round \\| see OQ-5 |\n"
+        )
+        for permit in (
+            "The bundle republish is mayor-owned ... workers have no access.",
+            "- [ ] the bundle republish is mayor-owned… workers have no access",
+            "Screenshots are out of scope for this work.",
+            "143 MetricTile sizing is deferred to the next round",
+            "| 143 | `MetricTile` sizing is deferred to the next round",
+            "workers have no access. Screenshots are **Out of Scope** for this work.",
+            # Two list items quoted on one line, with the markers kept inline.
+            "- The bundle republish is mayor-owned ... workers have no access. - Screenshots are out of scope for this work.",
+            "The bundle republish is mayor-owned \u2014 \u2026 workers have no access.",
+        ):
+            with self.subTest(permit=permit):
+                self.validate(self.artifact(ac3_status="deferred", permit=permit), requirements=requirements)
+        # Folding is not fuzzy matching: other words are still other words.
+        with self.assertRaisesRegex(build_artifact_validator.ValidationError, "permit text is not in the requirements artifact"):
+            self.validate(
+                self.artifact(ac3_status="deferred", permit="The bundle republish is out of scope for workers."),
+                requirements=requirements,
+            )
+
+    def test_a_requirement_s_own_statement_is_not_a_permit(self) -> None:
+        # gc-gdyaz review: "the text is in the requirements" let any requirement
+        # permit its own deferral. The quote must hand the requirement off.
+        for permit in (
+            "`make preflight-fast` exits 0 and the pull request's checks are green.",
+            "the new guard rejects a team-less item.",
+            "after merge, the Dependabot alerts for these packages auto-close."[len("after merge, ") :],
+        ):
+            with self.subTest(permit=permit):
+                with self.assertRaises(build_artifact_validator.ValidationError) as caught:
+                    self.validate(self.artifact(ac3_status="deferred", permit=permit))
+                message = str(caught.exception)
+                self.assertIn("trace.coverage[AC-3]", message)
+                self.assertIn("does not hand the requirement off", message)
+                self.assertIn("A requirement's own statement is not a permit", message)
+                self.assertIn(permit[:40], message)
+                self.assertIn('"out of scope"', message)
+
+    def test_hand_off_words_the_corpus_uses_are_accepted(self) -> None:
+        hand_offs = (
+            "AC-3 (post-merge, mayor): the mayor triggers the deploy and records the result.",
+            "After merge, the mayor runs contract section 14 and records the new bundle hash.",
+            "Out of scope: the first-import path, which is a separate bead.",
+            "Not in scope: Accounts (next round), the Dashboard tab.",
+            "Not in this work: the journal-entry editor.",
+            "If it cannot be done reliably, say why in the summary and file a follow-up bead.",
+            "The reply and the handoff log line are mayor-owned.",
+            "Publishing to the Design project is mayor-side.",
+            "Section 5: Needs Jon (product decision / data repair): flag, do not execute.",
+            "This is an open user decision; don't touch it.",
+            "Do not touch anything already covered by workflow gcas-imx9ei.",
+            "Do not write to the Claude Design project directly.",
+            "If OQ-5 is still open, AC-8b is blocked-by-DS (OQ-5) and the file is untouched.",
+            "Each item has a disposition: implemented, different shape, or deferred (reason).",
+            "Optional (ask the mayor first; this is CI config): decide whether these specs run in CI.",
+            "The other three proposals are held separately.",
+            "The decision replaces REQ-2's STOP condition.",
+        )
+        own_statements = (
+            "`npm audit --omit=optional` shows no advisories for these three packages.",
+            "Do not block unrelated evidence: decide whether Vitest still runs when ubs fails.",
+            "Append a dated follow-up row instead of editing a row in place.",
+            "Source handoff: Claude Design round 7 (relayed by the mayor, 2026-09-12).",
+            "Verified by the mayor against origin/main on 2026-09-30.",
+            "No change to the content of existing rows.",
+            "The publish step marks the pull request ready only once review approves.",
+            "It accepts an optional, precomputed hierarchy context.",
+            "The chevron it held is decorative and promises navigation that does not exist.",
+            "The full run on main ends with zero failures and zero skipped tests.",
+        )
+        for text in hand_offs:
+            with self.subTest(hand_off=text):
+                self.assertTrue(
+                    build_artifact_validator.permit_cue(build_artifact_validator.normalize_permit_text(text)), text
+                )
+        for text in own_statements:
+            with self.subTest(own_statement=text):
+                self.assertEqual(
+                    build_artifact_validator.permit_cue(build_artifact_validator.normalize_permit_text(text)), "", text
+                )
 
     def test_permit_too_short_or_not_a_string_is_rejected(self) -> None:
         with self.assertRaisesRegex(build_artifact_validator.ValidationError, r"permit is 12 characters; quote at least 20"):
@@ -592,13 +684,26 @@ class CoveragePermitTests(unittest.TestCase):
             self.validate(self.artifact(ac3_status="deferred", status="draft"))
 
     def test_permit_cannot_be_checked_without_a_requirements_artifact(self) -> None:
-        with self.assertRaisesRegex(build_artifact_validator.ValidationError, "no requirements artifact was supplied"):
+        text = self.artifact(ac3_status="deferred", permit=self.PERMIT_AC3)
+        with self.assertRaises(build_artifact_validator.ValidationError) as caught:
             build_artifact_validator.validate_artifact_text(
-                self.artifact(ac3_status="deferred", permit=self.PERMIT_AC3),
+                text,
                 expected_schema="gc.build.plan.v1",
                 require_coverage_permits=True,
                 requirements_sources=[],
+                requirements_hint="record it with `gc bd update root --set-metadata gc.build.requirements_path=<path>`",
             )
+        message = str(caught.exception)
+        self.assertIn("1 coverage entries are not 'covered' (AC-3)", message)
+        self.assertIn("the requirements path could not be resolved", message)
+        self.assertIn("gc bd update root --set-metadata gc.build.requirements_path=<path>", message)
+        # Nothing is left open, so nothing needs the requirements text.
+        build_artifact_validator.validate_artifact_text(
+            self.artifact(ac3_status="covered"),
+            expected_schema="gc.build.plan.v1",
+            require_coverage_permits=True,
+            requirements_sources=[],
+        )
 
     def test_permit_rule_is_off_unless_the_stage_opts_in(self) -> None:
         artifact = build_artifact_validator.validate_artifact_text(
@@ -610,6 +715,101 @@ class CoveragePermitTests(unittest.TestCase):
         text = self.artifact(ac3_status="covered").replace("ids: [AC-1, AC-2, AC-3]", "ids: [AC-1, AC-2, AC-3, AC-4]")
         with self.assertRaisesRegex(build_artifact_validator.ValidationError, r"missing: \['AC-4'\]"):
             self.validate(text)
+
+    def omitting_ac3(self, schema: str = "gc.build.implementation-summary.v1", status: str = "approved") -> str:
+        """An artifact that leaves AC-3 out of its own id list AND its coverage
+        (plans/deploy-pipeline-fix-gcas-enknty/task-gcas-42nz6l-summary.md)."""
+        return (
+            self.artifact(schema, ac3_status="covered", status=status)
+            .replace("ids: [AC-1, AC-2, AC-3]", "ids: [AC-1, AC-2]")
+            .replace("    - id: AC-3\n      status: covered\n", "")
+            .replace("| AC-3 | covered |", "")
+        )
+
+    def test_requirement_ids_come_from_the_requirements_not_from_the_artifact(self) -> None:
+        for schema in self.SECTIONS:
+            with self.subTest(schema=schema):
+                text = self.omitting_ac3(schema)
+                # The artifact is consistent with itself, so the old rule passes it.
+                build_artifact_validator.validate_artifact_text(text, expected_schema=schema)
+                with self.assertRaises(build_artifact_validator.ValidationError) as caught:
+                    self.validate(text, schema)
+                message = str(caught.exception)
+                self.assertIn("every requirement id the requirements artifact defines", message)
+                self.assertIn("missing from requirements.md: AC-3", message)
+                self.assertNotIn("AC-1", message)
+
+    def test_missing_ids_and_missing_permits_are_reported_together(self) -> None:
+        requirements = self.REQUIREMENTS + "\n- **AC-4:** the summary lists the unshipped commits.\n"
+        with self.assertRaises(build_artifact_validator.ValidationError) as caught:
+            self.validate(self.artifact(ac3_status="deferred"), requirements=requirements)
+        message = str(caught.exception)
+        self.assertIn("missing from requirements.md: AC-4", message)
+        self.assertIn("trace.coverage[AC-3] (status 'deferred'): missing permit", message)
+
+    def test_an_artifact_that_is_not_approved_need_not_list_every_requirement(self) -> None:
+        self.validate(self.omitting_ac3("gc.build.plan.v1", status="blocked"), "gc.build.plan.v1")
+        self.validate(self.omitting_ac3(status="blocked"), "gc.build.implementation-summary.v1")
+
+    def test_a_coverage_id_with_a_descriptive_suffix_accounts_for_its_requirement(self) -> None:
+        text = (
+            self.artifact(ac3_status="covered")
+            .replace("ids: [AC-1, AC-2, AC-3]", "ids: [AC-1, AC-2, AC-3-alerts-auto-close]")
+            .replace("    - id: AC-3\n", "    - id: AC-3-alerts-auto-close\n")
+            .replace("| AC-3 | covered |", "| AC-3-alerts-auto-close | covered |")
+        )
+        self.validate(text)
+        # AC-30 is another requirement, not AC-3 with a suffix.
+        other = text.replace("AC-3-alerts-auto-close", "AC-30")
+        with self.assertRaisesRegex(build_artifact_validator.ValidationError, "missing from requirements.md: AC-3"):
+            self.validate(other)
+
+    def test_requirement_ids_are_extracted_where_the_corpus_defines_them(self) -> None:
+        text = (
+            "---\n"
+            "trace:\n  coverage:\n    - id: REQ-900\n      status: covered\n"
+            "---\n"
+            "# R10 \u2014 Settings tie-out (gcas-ttl6ov), CVE-2026-84377\n\n"
+            "- **AC-1.** The cause, stated with a reproduction.\n"
+            "- **AC-2 (R1):** every shard uploads a blob. See AC-1 and SCOPE-9 above.\n"
+            "- **AC-3:** a normal run shows none.\n"
+            "- AC-4: root-cause the interception.\n"
+            "- AC-5. Red first.\n"
+            "- AC-6 (R1): run the wrapper.\n"
+            "- [ ] **AC-7 (REQ-001)** \u2014 an automated a11y scan finds zero live regions.\n"
+            "- **AC-8b is now required.** Every tile value fits.\n"
+            "- **SCOPE-1. Find the cause before changing anything.** Reproduce the failure.\n"
+            "- **REQ-5 (new):** find the code path.\n"
+            "- **TS-1** \u2014 refactor the badge.\n"
+            "- **US-1** \u2014 as a screen-reader user I want quiet chrome.\n"
+            "5. **OQ-5, tile fit (from Part 1 F-143-fit). This blocks item 12.**\n\n"
+            "**AC-9 (item 1).**\n\n"
+            "REQ-001: a new city-local order.\n"
+            "OOS-1. No writes to the Claude Design project.\n"
+            "OOS-2. No generic lint rule.\n"
+            "CON-1: make commands only.\n\n"
+            "### REQ-1 \u2014 the sync excludes teamless items\n\n"
+            "## AC-2 AMENDMENT (mayor, 2026-09-23)\n\n"
+            "> - **AC-10:** quoted criteria count too.\n\n"
+            # None of these define a requirement id.
+            "The original AC-99 (three clean runs) is replaced; cite AC-98' as the basis.\n"
+            "AC-97 tolerance would fail on main without any code change.\n"
+            "OQ-96;\n"
+            "PYSEC-2026-3785, PYSEC-2026-3786 and GHSA-1234 are the advisories.\n"
+            "- AC-95-full-suite-green: a slug, not an id.\n"
+            "- AC-94 is met by the branch's four-instance run.\n"
+            "- R1: fix the blob path. **R2:** assert the effect. ### R3: a label without a hyphen\n"
+            "- **G1\u2013G4 are the whole distance.** **Q1** roster rhythm. **C3/C4** no retry.\n"
+            "| REQ-93 | covered |\n"
+            "```\n- **AC-92:** inside a code fence\n```\n"
+        )
+        self.assertEqual(
+            build_artifact_validator.extract_requirement_ids(text),
+            [
+                "AC-1", "AC-2", "AC-3", "AC-4", "AC-5", "AC-6", "AC-7", "AC-8b", "SCOPE-1", "REQ-5", "TS-1", "US-1",
+                "OQ-5", "AC-9", "REQ-001", "OOS-1", "OOS-2", "CON-1", "REQ-1", "AC-10",
+            ],
+        )
 
     def test_cli_checks_permits_against_the_given_requirements_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

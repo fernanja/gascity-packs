@@ -35,10 +35,20 @@ FORBIDDEN_REQUIRED_FIELD_NAMES = {"owner", "stage-owner", "stage_owner", "person
 
 # Coverage permits (gc-gdyaz). A producer stage that opts in (step metadata
 # gc.build.coverage_permits=required, passed here as --require-coverage-permits)
-# may not leave a requirement at any status other than "covered" unless the
-# coverage entry carries a `permit`: a word-for-word quote of the requirements
-# text that allows it. An artifact whose own status already says the work is
-# not approved needs no permits: it stops the build by itself.
+# is held to two rules, both checked against the requirements artifact the
+# workflow records, never against what the artifact says about itself:
+#
+# 1. Every requirement id the requirements artifact defines has a coverage
+#    entry. An artifact cannot drop a requirement by leaving it out of both
+#    its own `trace.upstream[].ids` and its coverage.
+# 2. A coverage entry at any status other than "covered" carries a `permit`: a
+#    word-for-word quote of requirements text that hands the requirement off.
+#    The quote must contain hand-off words (PERMIT_CUES). A requirement's own
+#    statement is in the requirements too, so "the text is there" alone would
+#    let any requirement permit its own deferral.
+#
+# An artifact whose own status already says the work is not approved is held
+# to neither rule: it stops the build by itself.
 PERMIT_EXEMPT_ARTIFACT_STATUSES = frozenset({"blocked", "questions", "changes_required", "superseded"})
 MIN_PERMIT_CHARS = 20
 PERMIT_FOLD_TABLE = str.maketrans(
@@ -49,13 +59,91 @@ PERMIT_FOLD_TABLE = str.maketrans(
         "\u201d": '"',
         "\u2010": "-",
         "\u2011": "-",
+        "\u2012": "-",
         "\u2013": "-",
         "\u2014": "-",
+        "\u2212": "-",
         "\u00a0": " ",
+        "\u2026": "...",
     }
 )
-PERMIT_BLOCKQUOTE_RE = re.compile(r"(?m)^[ \t]*>+[ \t]?")
-PERMIT_MARKDOWN_NOISE_RE = re.compile(r"[`*]")
+PERMIT_LINK_RE = re.compile(r"!?\[([^\]\n]*)\]\([^)\n]*\)")
+PERMIT_BLOCKQUOTE_RE = re.compile(r"(?m)^[ \t]*(?:>[ \t]?)+")
+PERMIT_LINE_MARKER_RE = re.compile(r"(?m)^[ \t]*(?:#{1,6}[ \t]+|(?:[-*+]|\d{1,3}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?)")
+PERMIT_MARKDOWN_NOISE_RE = re.compile(r"[`*_~\\]")
+PERMIT_ELLIPSIS_RE = re.compile(r"\s*\.{3,}\s*")
+PERMIT_LONE_DASH_RE = re.compile(r"(?<=\s)-+(?=\s)")
+PERMIT_EDGE_ELLIPSIS_RE = re.compile(r"^(?:\.\.\.\s*)+|(?:\s*\.\.\.)+$")
+
+# Hand-off words a permit must contain, matched on the folded (lower-case,
+# Markdown-free) quote. Chosen from the requirements corpus in
+# /Users/fernanja/gc/plans (111 files): each group is how those files say a
+# requirement is someone else's, for later, or not for this work.
+PERMIT_CUES: tuple[tuple[str, str], ...] = (
+    (
+        "a later moment",
+        r"\bpost-?merge\b|\bpost-?deploy\b"
+        r"|\bafter (?:the |this |that |it |a |its )?(?:pr |pull request |build |change |fix |work |workflow |branch )?"
+        r"(?:is |has |gets |have |are |been )?(?:merge|merges|merged|merging|lands|landed|ships|shipped|deploy|deploys|deployed)\b"
+        r"|\bonce (?:the |this |that |it )?(?:pr |pull request |build |change |fix )?(?:is |has |gets )?(?:merged|landed|shipped|deployed)\b"
+        r"|\bnext round\b|\b(?:later|future|subsequent) (?:stage|step|part|round|bead|pr|pull request|build|workflow|change|task|issue)\b"
+        r"|\bfollow[- ]?up beads?\b|\bas a follow[- ]?up\b|\b(?:mayor|mayor's|tracked) follow[- ]?ups?\b",
+    ),
+    (
+        "an exclusion",
+        r"\bout[- ]of[- ]scope\b|\bnot in scope\b|\boutside (?:the |this )?scope\b|\bnon-?goals?\b"
+        r"|\bnot (?:a )?part of (?:this|the)\b"
+        r"|\bnot in this (?:work|bead|build|pr|pull request|round|change|fix|part|workflow|task)\b"
+        r"|\bnot (?:done|fixed|changed|built|required|needed|addressed|included) (?:here|in this)\b"
+        r"|\bnot this (?:pr|bead|build)'s to (?:fix|do|decide)\b"
+        r"|\bseparate (?:bead|pr|pull request|build|workflow|round|change|issue|task)\b|\bits own (?:bead|pr|pull request)\b"
+        r"|\b(?:do not|don't|never) (?:touch|attempt|write (?:in)?to)\b|\bdo not execute\b"
+        r"|\bsupersed(?:e|es|ed)\b|\b(?:replaces|amends) (?:[a-z]+-\d+|the (?:original|earlier|prior|previous))",
+    ),
+    (
+        "another owner",
+        r"\bmayor-(?:owned|side)\b|\bmayor \(not the worker\)|\bnot (?:a|the) worker\b"
+        r"|\bthe mayor (?:then |also |will |alone |must )?(?:owns|checks|triggers|records|repins|publishes|republishes|handles|decides|verifies|runs|relays|merges|does|performs|answers|closes|rebases|reviews|writes|propagates|gates|files)\b"
+        r"|\bmayor's (?:decision|call|job|check|follow[- ]?up)\b|\bfor the mayor to \w+"
+        r"|\b(?:repaired|handled|assembled|done|run|checked|published|decided|triggered|gated|answered|closed|performed) (?:separately |directly |later )?by the mayor\b"
+        r"|\bjon's (?:decision|call)\b|\bjon-gated\b|\bneeds (?:jon|the mayor|the owner|a human)\b"
+        r"|\b(?:user|product|owner|comms|data)(?:/\w+)? decision\b|\bstanding decisions?\b"
+        r"|\bbelongs to\b|\bds-side\b|\bdesign-side[- ]only\b",
+    ),
+    (
+        "a deferral",
+        r"\bdefer(?:red|s|ral|rals)?\b|\bfine to (?:defer|decline|skip)\b|\bnon-blocking\b"
+        r"|\b(?:does|do) not block (?:this (?:pr|ac|bead|build|work|change)|on it)\b"
+        r"|\boptional \(|\(optional\b|\bis optional\b|\boptional here\b"
+        r"|\bheld (?:-|until|separately)|\b(?:is|are|intentionally) held\b"
+        r"|\bblocked[- ](?:by|on)\b|\breported as blocked\b",
+    ),
+)
+PERMIT_CUE_RES = tuple((label, re.compile(pattern)) for label, pattern in PERMIT_CUES)
+PERMIT_CUE_EXAMPLES = (
+    '"post-merge", "after merge", "next round", "follow-up bead", "out of scope", "not in this work", '
+    '"separate bead", "do not touch", "mayor-owned", "the mayor checks", "Jon\'s decision", "deferred", "blocked on"'
+)
+
+# Requirement ids a requirements artifact defines. An id is a label made of
+# capital letters, a hyphen and a number (AC-1, SCOPE-2, REQ-001, OQ-5, CON-1,
+# OOS-3, TS-1, US-2), optionally with one lower-case letter (AC-8b). It counts
+# as defined where it leads a list item, a heading, or a paragraph line, as in
+# `- **AC-1.** ...`, `- AC-1: ...`, `### REQ-1 — ...`, `**AC-1 (item 1).**`,
+# `REQ-001: ...`. A mention in running prose is not a definition. Labels
+# without a hyphen (R1, G4, Q2) are not extracted: in the corpus the same
+# shape names design rounds ("R10 — Settings") and findings.
+REQUIREMENT_ID_DEFINITION_RE = re.compile(
+    r"^[ \t]*(?:>[ \t]*)*"
+    r"(?:(?P<list>(?:[-*+]|\d{1,3}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?)|(?P<head>#{1,6}[ \t]+))?"
+    r"(?P<open>\*\*|__|`)?"
+    r"(?P<id>[A-Z][A-Z0-9]{0,11}-\d{1,4}[a-z]?)"
+    r"(?P<after>.{0,3})"
+)
+REQUIREMENT_ID_NOT_A_LABEL_RE = re.compile(r"^[-'\u2019/\u2013\w]")
+REQUIREMENT_ID_PLAIN_LABEL_END_RE = re.compile(r"^(?:[.:)](?:\s|\*|$)|\s*$|\s\(|\s[-\u2013\u2014]\s)")
+REQUIREMENT_ID_PARAGRAPH_LABEL_END_RE = re.compile(r"^[.:](?:\s|$)")
+FENCE_RE = re.compile(r"^[ \t]*(```|~~~)")
 
 
 class ValidationError(Exception):
@@ -81,12 +169,15 @@ def validate_artifact_text(
     expected_schema: str = "",
     require_coverage_permits: bool = False,
     requirements_sources: list[tuple[str, str]] | None = None,
+    requirements_hint: str = "",
 ) -> BuildArtifact:
     """Validate one build artifact.
 
-    require_coverage_permits turns on the permit rule for this artifact;
-    requirements_sources is the (label, text) list a permit may quote from. The
-    caller supplies it: an artifact never names its own permit source.
+    require_coverage_permits turns on the coverage rules for this artifact;
+    requirements_sources is the (label, text) list whose requirement ids must
+    all be covered and whose text a permit may quote. The caller supplies it:
+    an artifact never names its own requirements. requirements_hint says, for
+    the error message, why the list is empty when it is.
     """
     schema_id, front_matter, body = parse_front_matter(text)
     if expected_schema and schema_id != expected_schema:
@@ -100,7 +191,7 @@ def validate_artifact_text(
     coverage = validate_coverage(trace, schema)
     validate_coverage_completeness(upstream, coverage)
     if require_coverage_permits:
-        validate_coverage_permits(front_matter, coverage, requirements_sources or [])
+        validate_requirements_coverage(front_matter, coverage, requirements_sources or [], requirements_hint)
     validate_markdown_coverage(body, coverage)
     validate_required_sections(body, schema)
     return BuildArtifact(
@@ -352,25 +443,122 @@ def validate_coverage(trace: dict[str, Any], schema: dict[str, Any]) -> list[dic
 
 
 def normalize_permit_text(text: str) -> str:
-    """Fold layout so a quote survives re-wrapping: whitespace runs, blockquote
-    markers, Markdown emphasis/code marks, and typographic quotes and dashes."""
+    """Fold everything a faithful quote may differ in from its source: line
+    wrapping, letter case, typographic quotes, dashes and ellipses, blockquote,
+    heading and list markers, Markdown links (the link text is kept), emphasis
+    and code marks, table pipes, and dashes that stand alone."""
     text = text.translate(PERMIT_FOLD_TABLE)
+    text = PERMIT_LINK_RE.sub(r"\1", text)
     text = PERMIT_BLOCKQUOTE_RE.sub("", text)
-    text = PERMIT_MARKDOWN_NOISE_RE.sub("", text)
-    return " ".join(text.split())
+    text = PERMIT_LINE_MARKER_RE.sub("", text)
+    text = PERMIT_MARKDOWN_NOISE_RE.sub("", text).replace("|", " ")
+    text = PERMIT_ELLIPSIS_RE.sub(" ... ", text)
+    # A dash standing alone is punctuation or a list marker written inline
+    # ("a - b", "- one - two"): the same quote with or without it.
+    text = PERMIT_LONE_DASH_RE.sub(" ", f" {text} ")
+    return " ".join(text.casefold().split())
 
 
-def validate_coverage_permits(
+def permit_cue(folded_quote: str) -> str:
+    """Name the kind of hand-off a folded quote states, or "" when it states none."""
+    for label, pattern in PERMIT_CUE_RES:
+        if pattern.search(folded_quote):
+            return label
+    return ""
+
+
+def extract_requirement_ids(text: str) -> list[str]:
+    """Requirement ids defined in a requirements artifact, in first-seen order."""
+    ids: list[str] = []
+    in_fence = False
+    for line in text.splitlines():
+        if FENCE_RE.match(line):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        match = REQUIREMENT_ID_DEFINITION_RE.match(line)
+        if match and not REQUIREMENT_ID_NOT_A_LABEL_RE.match(match.group("after")):
+            after = match.group("after")
+            if match.group("head") or match.group("open"):
+                defined = True
+            elif match.group("list"):
+                defined = bool(REQUIREMENT_ID_PLAIN_LABEL_END_RE.match(after))
+            else:
+                defined = bool(REQUIREMENT_ID_PARAGRAPH_LABEL_END_RE.match(after))
+            if defined and match.group("id") not in ids:
+                ids.append(match.group("id"))
+    return ids
+
+
+def coverage_accounts_for(requirement_id: str, coverage_ids: set[str]) -> bool:
+    """True when an entry is for this requirement: the id itself, or the id
+    with a descriptive suffix (`REQ-4-ci-wiring`, `AC-2.local`)."""
+    if requirement_id in coverage_ids:
+        return True
+    return any(
+        covered.startswith(requirement_id) and covered[len(requirement_id)] in "-_.:/ "
+        for covered in coverage_ids
+        if len(covered) > len(requirement_id)
+    )
+
+
+def validate_requirements_coverage(
     front_matter: dict[str, Any],
     coverage: list[dict[str, Any]],
     requirements_sources: list[tuple[str, str]],
+    requirements_hint: str = "",
 ) -> None:
-    status = str(front_matter.get("status", "")).strip()
-    if status in PERMIT_EXEMPT_ARTIFACT_STATUSES:
+    """Both coverage rules, reported together so one repair pass can fix both."""
+    if str(front_matter.get("status", "")).strip() in PERMIT_EXEMPT_ARTIFACT_STATUSES:
         return
+    problems = [
+        problem
+        for problem in (
+            missing_requirement_ids_problem(coverage, requirements_sources),
+            coverage_permits_problem(coverage, requirements_sources, requirements_hint),
+        )
+        if problem
+    ]
+    if problems:
+        raise ValidationError("\n".join(problems))
+
+
+def missing_requirement_ids_problem(coverage: list[dict[str, Any]], requirements_sources: list[tuple[str, str]]) -> str:
+    coverage_ids = {str(entry["id"]) for entry in coverage}
+    missing_by_source: list[str] = []
+    for label, text in requirements_sources:
+        missing = [item for item in extract_requirement_ids(text) if not coverage_accounts_for(item, coverage_ids)]
+        if missing:
+            missing_by_source.append(f"{label}: {', '.join(missing)}")
+    if not missing_by_source:
+        return ""
+    return (
+        "requirement ids: coverage must account for every requirement id the requirements artifact defines, whether or not this "
+        "artifact lists it under trace.upstream[].ids. Add a trace.coverage entry and a coverage-table row for each id missing from "
+        + "; ".join(missing_by_source)
+    )
+
+
+def coverage_permits_problem(
+    coverage: list[dict[str, Any]],
+    requirements_sources: list[tuple[str, str]],
+    requirements_hint: str = "",
+) -> str:
     open_entries = [entry for entry in coverage if str(entry["status"]) != "covered"]
     if not open_entries:
-        return
+        return ""
+
+    if not requirements_sources:
+        # Nothing to check a quote against. Checking it against some other
+        # text (the work item, the plan) would reject a correct quote and
+        # accept a wrong one, so say what is missing instead.
+        open_ids = ", ".join(str(entry["id"]) for entry in open_entries)
+        return (
+            f"coverage permits: {len(open_entries)} coverage entries are not 'covered' ({open_ids}) and each needs a permit quoting the "
+            "requirements artifact, but the requirements path could not be resolved"
+            + (f": {requirements_hint}" if requirements_hint else ": the workflow root must record gc.build.requirements_path or gc.var.requirements_path")
+        )
 
     labels = [label for label, _ in requirements_sources]
     haystacks = [normalize_permit_text(text) for _, text in requirements_sources]
@@ -388,29 +576,33 @@ def validate_coverage_permits(
         if not isinstance(permit, str):
             problems.append(f"{where}: permit must be a string quoting the requirements artifact")
             continue
-        needle = normalize_permit_text(permit)
+        needle = PERMIT_EDGE_ELLIPSIS_RE.sub("", normalize_permit_text(permit))
         if len(needle) < MIN_PERMIT_CHARS:
             problems.append(
                 f"{where}: permit is {len(needle)} characters; quote at least {MIN_PERMIT_CHARS} characters of the requirements text that allows this"
             )
             continue
-        if not haystacks:
-            problems.append(
-                f"{where}: no requirements artifact was supplied to check the permit against (the workflow root must record gc.build.requirements_path or gc.var.requirements_path)"
-            )
-            continue
+        shown = " ".join(permit.split())
+        shown = shown if len(shown) <= 120 else shown[:117] + "..."
         if not any(needle in haystack for haystack in haystacks):
-            shown = needle if len(needle) <= 120 else needle[:117] + "..."
             problems.append(
                 f"{where}: permit text is not in the requirements artifact ({', '.join(labels)}): \"{shown}\". Quote the requirements word for word"
             )
-    if problems:
-        raise ValidationError(
-            "coverage permits: a requirement may be left at a status other than 'covered' only when the requirements artifact itself allows it. "
-            "For each entry below either do the work and mark it 'covered', quote the permitting requirements text in `permit`, "
-            "or set the artifact `status: blocked` and stop for a decision.\n- "
-            + "\n- ".join(problems)
-        )
+            continue
+        if not permit_cue(needle):
+            problems.append(
+                f"{where}: the permit quotes the requirements, but the quoted text does not hand the requirement off: \"{shown}\". "
+                f"A requirement's own statement is not a permit. Quote the words that say it is for later, for someone else, or not for this work (for example {PERMIT_CUE_EXAMPLES}); "
+                "if the requirements do not say that, the requirement is yours to deliver"
+            )
+    if not problems:
+        return ""
+    return (
+        "coverage permits: a requirement may be left at a status other than 'covered' only when the requirements artifact itself hands it off. "
+        "For each entry below either do the work and mark it 'covered', quote the requirements text that hands it off in `permit`, "
+        "or set the artifact `status: blocked` and stop for a decision.\n- "
+        + "\n- ".join(problems)
+    )
 
 
 def read_requirements_sources(paths: list[Path]) -> list[tuple[str, str]]:
@@ -524,7 +716,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         default=[],
         type=Path,
         metavar="PATH",
-        help="Requirements artifact a permit may quote from (repeatable)",
+        help="Requirements artifact whose ids must all be covered and whose text a permit may quote (repeatable)",
+    )
+    parser.add_argument(
+        "--requirements-hint",
+        default="",
+        metavar="TEXT",
+        help="Shown when a permit needs checking and no --requirements was resolved: why, and how to record the path",
     )
     return parser.parse_args(argv)
 
@@ -537,6 +735,7 @@ def main(argv: list[str] | None = None) -> int:
             expected_schema=args.schema,
             require_coverage_permits=args.require_coverage_permits,
             requirements_sources=read_requirements_sources(args.requirements) if args.require_coverage_permits else None,
+            requirements_hint=args.requirements_hint,
         )
     except CLI_ERROR_TYPES as exc:
         print(f"error: {exc}", file=sys.stderr)

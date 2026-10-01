@@ -41,23 +41,40 @@ has already passed:
    publish were all still open, and only a human converting it to draft kept
    it unmerged). Marking it ready belongs exclusively to the publish step,
    after review and repair-review approve.
-3. Wait for GitHub's checks on that commit: `gh pr checks <number> --watch`.
-   The command returns by itself when the checks finish, so it is not a
-   blocking command of the kind the shell rules forbid. If your shell tool
-   limits how long one call may run, run it in the background and wait for it
-   to exit, or run it again until it returns by itself. Do not replace it with
-   a fixed sleep or a long poll interval: a worker once sat an hour past the
-   end of a run that way. If it says no checks are reported yet, CI has not
-   registered; wait a minute and run it again.
-4. A failed check is yours to fix before anyone reviews. Read the failed job's
-   log (`gh run view <run-id> --log-failed`), fix the cause on the branch,
-   commit, push, and wait again. A failing test is fixed; it is never skipped,
-   quarantined or re-baselined away, and that includes a test that was already
-   failing before your change. If the failure is in CI's own machinery (a
-   runner that died, a download that timed out), you may rerun the failed job
-   once (`gh run rerun <run-id> --failed`) and must record in the summary that
-   you did, with the run URL and both results. The gate does not tell a flake
-   from a defect: a check that is still red is red.
+3. Wait for GitHub's checks on that commit, with a bound:
+   `perl -e '$t=shift; $p=fork; exec @ARGV unless $p; $SIG{ALRM}=sub{kill "TERM",$p; exit 124}; alarm $t; waitpid $p,0; exit $?>>8' 1500 gh pr checks <number> --watch --interval 30`.
+   This `perl` wrapper is the time limit that works on macOS and Linux alike
+   (GNU `timeout` is not installed on macOS, and a bare `alarm` before `exec`
+   does not stop `gh`, which ignores that signal). The command returns by
+   itself when the checks finish (0: green, 1: a check failed) and the wrapper
+   ends it after 25 minutes (status 124), so it is not a blocking command of
+   the kind the shell rules forbid. If your shell tool allows less than that for one
+   call, pass a smaller number of seconds, or run it in the background and
+   wait for it to exit. Do not replace it with a fixed sleep or a long poll
+   interval: a worker once sat an hour past the end of a run that way. If it
+   says no checks are reported yet, CI has not registered; wait a minute and
+   run it again. When the wrapper ends the wait, run `gh pr checks <number>`
+   once and read what is unfinished. A check that is running gets another
+   bounded wait, three waits at most. A check that sat `queued` or `waiting`
+   through a whole wait is stuck: do not wait again, take the exit under "If
+   CI cannot be made green" below.
+4. A failed check is yours to fix, before anyone reviews, when your branch
+   broke it. Read the failed job's log (`gh run view <run-id> --log-failed`),
+   fix the cause on the branch, commit, push, and wait again. A failing test
+   is fixed; it is never skipped, quarantined or re-baselined away. A failure
+   the base branch also has is different: when the same check is red on the
+   base branch's own most recent run of it, and the base branch does not
+   require that check, the gate lets it pass and prints a `WARNING` line
+   naming both runs. Do not fix the base branch's failure on this branch, and
+   do not pass over it in silence: copy that `WARNING` line, with both run
+   URLs, into the summary's `## Remaining Risks`. The gate makes this call,
+   not you: a red check that the base branch requires, that is green on the
+   base branch, or that the base branch has never run, blocks. If the failure
+   is in CI's own machinery (a runner that died, a download that timed out),
+   you may rerun the failed job once (`gh run rerun <run-id> --failed`) and
+   must record in the summary that you did, with the run URL and both results.
+   The gate does not tell a flake from a defect: a check that is still red is
+   red.
 5. Before closing, run the gate yourself from the launcher rig root, the same
    script the controller runs when this step closes:
    `GC_BEAD_ID=<claimed-step-id> "$(gc formula list --json | python3 -c 'import json,os,sys; c=[os.path.join(os.path.dirname(p),"assets/scripts/checks/pr-ci-green.sh") for p in json.load(sys.stdin)["search_paths"]]; print([p for p in c if os.path.isfile(p)][-1])')"`.
@@ -66,6 +83,17 @@ has already passed:
    `## Verification`. A criterion such as "the pull request's checks are
    green" is then `covered`, with the run as evidence.
 
+If CI cannot be made green: when a check your branch broke is still red after
+your fixes, a check is stuck, or the fix needs a decision that is not yours,
+do not close the step as passed, do not weaken, skip or re-baseline a test,
+and do not close it over and over to use up the attempts. Write what you found
+in the summary, then close the step as a hard failure that names each failing
+or stuck check with its URL:
+`gc bd update "<claimed-step-id>" --set-metadata gc.outcome=fail --set-metadata gc.failure_class=hard --set-metadata "gc.failure_reason=<check names and URLs>"`,
+then `gc bd close "<claimed-step-id>"`. `gc.failure_class=hard` ends the step
+at once and review does not start; a failed outcome without it is handed back
+as a new attempt, up to three times.
+
 When push or open_pr is not `true`, do not open a pull request; the gate then
 records `skipped: no publishing intent` and passes. If the branch has an open
 pull request anyway, the gate still requires its checks to be green.
@@ -73,9 +101,12 @@ pull request anyway, the gate still requires its checks to be green.
 The handoff gate is `../assets/scripts/checks/implementation-handoff-valid.sh`:
 the artifact validator described below, then
 `../assets/scripts/checks/pr-ci-green.sh`. The controller does not wait for
-CI. A step closed while a check is unfinished or red fails the gate and comes
-back to you as a new attempt with the failing checks in `gc.attempt_log`;
-after three attempts the step fails and review does not start.
+CI. A step closed while a check is unfinished or red, or while the pull
+request is marked ready instead of draft (`gh pr ready --undo <number>` makes
+it a draft again), fails the gate and comes back to you as a new attempt with
+the failing checks in `gc.attempt_log`; after three attempts the step fails and
+review does not start. GitHub or the bead store being unreachable is not an attempt: the
+gate retries, and says `INFRA` rather than `FAIL`.
 
 Write or update the item summary with these schema-required body sections,
 using the exact `##` headings below in this order:
@@ -170,15 +201,26 @@ Trace front matter must use the validator shape exactly:
 - Coverage statuses are not artifact statuses. Use `covered` for satisfied
   requirements; do not use `approved` in `trace.coverage[].status` or the
   Markdown coverage table.
+- Every requirement id the requirements artifact defines needs a coverage
+  entry, whether or not you list it under `ids`. The gate reads the ids from
+  the requirements file itself: labels such as `AC-1`, `SCOPE-2`, `REQ-3`,
+  `OQ-4` or `CON-5` that lead a list item, a heading or a paragraph. A summary
+  that leaves one out of both lists is rejected.
 - A coverage entry with any status other than `covered` needs a `permit`
   beside its `rationale`: the sentence in the requirements artifact that
-  allows leaving it open, quoted word for word, at least 20 characters, for
+  hands the requirement off, quoted word for word, at least 20 characters, for
   example `permit: "The mayor checks this post-merge; it is not a worker AC."`.
-  The gate checks the quote against the requirements artifact recorded on the
-  workflow root (`gc.build.requirements_path`, fallback
-  `gc.var.requirements_path`; for a convoy with no requirements artifact, the
-  text of the work item) and rejects the summary when the permit is missing or
-  its text is not there (gc-gdyaz). "Not run", "no environment", "left for
+  The quote must itself say the requirement is for later, for someone else, or
+  not for this work ("post-merge", "out of scope", "not in this work",
+  "follow-up bead", "mayor-owned", "deferred" and the like): the requirement's
+  own statement is in the requirements too, and it is not a permit. The gate
+  checks the quote against the requirements artifact recorded on the workflow
+  root or, for an implementation item, on the workflow that launched it
+  (`gc.build.requirements_path`, fallback `gc.var.requirements_path`) and
+  rejects the summary when the permit is missing, its text is not there, or it
+  hands nothing off (gc-gdyaz). If no root records a requirements artifact,
+  the gate says so and names the command that records it; it never checks a
+  quote against the work item. "Not run", "no environment", "left for
   review" and "left for publish" are not permits: a required check that has
   not been run is work still to do. Run it and record the result. If it truly
   cannot be done here, write the summary with `status: blocked` and say what is

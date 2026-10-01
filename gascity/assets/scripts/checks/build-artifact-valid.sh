@@ -16,13 +16,24 @@ set -euo pipefail
 # the next bounded producer attempt. This gate never prompts.
 #
 # Optional step metadata:
-#   gc.build.coverage_permits=required - the artifact may leave a requirement at
-#     a status other than "covered" only with a `permit` quoting the
-#     requirements artifact (gc-gdyaz). The requirements artifact is the one the
-#     workflow root records (gc.build.requirements_path, then
-#     gc.var.requirements_path), never one the artifact names for itself. A
-#     workflow with no requirements artifact (a bare implementation convoy)
-#     falls back to the text of its source work item.
+#   gc.build.coverage_permits=required - the artifact must have a coverage entry
+#     for every requirement id the requirements artifact defines, and may leave
+#     one at a status other than "covered" only with a `permit` quoting
+#     requirements text that hands it off (gc-gdyaz). The requirements artifact
+#     is the one the workflow records (gc.build.requirements_path, then
+#     gc.var.requirements_path), never one the artifact names for itself. It is
+#     looked for on the workflow root and then, for an implementation item, on
+#     the workflow that launched it (gc.drain_control_id -> that bead's
+#     gc.root_bead_id): build-basic and build-from-requirements record the path
+#     their own requirements stage wrote on the parent root only. If no root
+#     records one, a quote is never checked against some other text: an
+#     artifact that needs a permit fails with how to record the path.
+#
+# Exit codes: 0 valid; 1 invalid (a failed attempt); 75 no verdict, because
+# `gc bd show` kept failing for a reason that says nothing about the artifact.
+# The dispatcher counts any exit code as a failed attempt and only a check
+# still running at its timeout as "could not run", so under the controller
+# (GC_ITERATION is set) the retries outlast the "5m" check timeout.
 
 fail() {
   echo "build-artifact-check: $*" >&2
@@ -34,6 +45,52 @@ BEAD_ID="${GC_BEAD_ID:-}"
 command -v gc >/dev/null 2>&1 || fail "gc is required on PATH"
 command -v python3 >/dev/null 2>&1 || fail "python3 is required on PATH"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+EXIT_NO_VERDICT=75
+INFRA_BUDGET_SECONDS="${BUILD_ARTIFACT_INFRA_BUDGET_SECONDS:-}"
+if [ -z "$INFRA_BUDGET_SECONDS" ]; then
+  if [ -n "${GC_ITERATION:-}" ]; then INFRA_BUDGET_SECONDS=330; else INFRA_BUDGET_SECONDS=45; fi
+fi
+RETRY_SLEEP_SECONDS="${BUILD_ARTIFACT_RETRY_SLEEP_SECONDS:-2}"
+
+WORK_TMP="$(mktemp -d)"
+cleanup() {
+  rm -rf "$WORK_TMP"
+}
+trap cleanup EXIT
+
+bd_show() {
+  # bd_show <bead-id> -> prints the bead JSON.
+  # Returns 1 when the bead does not exist, $EXIT_NO_VERDICT when the store
+  # kept failing (lock timeout, circuit breaker, a server restart).
+  local id="$1" out err delay="$RETRY_SLEEP_SECONDS" announced=""
+  while :; do
+    if out="$(gc bd show "$id" --json 2>"$WORK_TMP/bd-show.err")"; then
+      printf '%s' "$out"
+      return 0
+    fi
+    err="$(head -c 300 "$WORK_TMP/bd-show.err" | tr '\n' ' ')"
+    if printf '%s %s' "$out" "$err" | grep -Eqi 'no issues? found'; then
+      echo "build-artifact-check: bead $id does not exist: $err" >&2
+      return 1
+    fi
+    if [ "$SECONDS" -ge "$INFRA_BUDGET_SECONDS" ]; then
+      echo "build-artifact-check: INFRA no verdict: gc bd show $id kept failing: ${err:-no output}. Nothing was learned about the artifact; this is not a validation failure" >&2
+      return "$EXIT_NO_VERDICT"
+    fi
+    if [ -z "$announced" ]; then
+      # Said now, not at the end: under the controller the check timeout ends
+      # this process before it could say anything later.
+      echo "build-artifact-check: INFRA gc bd show $id failed: ${err:-no output}. This says nothing about the artifact, so there is no verdict yet; retrying with backoff. If it is still failing when the check times out, the controller runs the check again without counting a failed attempt" >&2
+      announced=1
+    fi
+    sleep "$delay"
+    case "$delay" in
+      *.*) ;;
+      *) delay=$((delay * 2)); [ "$delay" -le 30 ] || delay=30 ;;
+    esac
+  done
+}
 
 metadata_value() {
   # metadata_value <json> <key> -> prints metadata[key] or empty
@@ -58,7 +115,7 @@ print(value if isinstance(value, str) else "")
 ' "$2"
 }
 
-SHOW_JSON="$(gc bd show "$BEAD_ID" --json 2>/dev/null)" || fail "gc bd show $BEAD_ID failed"
+SHOW_JSON="$(bd_show "$BEAD_ID")" || exit $?
 
 SCHEMA="$(metadata_value "$SHOW_JSON" "gc.build.artifact_schema")"
 PATH_KEYS="$(metadata_value "$SHOW_JSON" "gc.build.artifact_path_keys")"
@@ -68,7 +125,7 @@ PATH_KEYS="$(metadata_value "$SHOW_JSON" "gc.build.artifact_path_keys")"
 ROOT_ID="$(metadata_value "$SHOW_JSON" "gc.root_bead_id")"
 ROOT_JSON="$SHOW_JSON"
 if [ -n "$ROOT_ID" ] && [ "$ROOT_ID" != "$BEAD_ID" ]; then
-  ROOT_JSON="$(gc bd show "$ROOT_ID" --json 2>/dev/null)" || fail "gc bd show $ROOT_ID failed"
+  ROOT_JSON="$(bd_show "$ROOT_ID")" || exit $?
 fi
 
 ARTIFACT_PATH=""
@@ -138,61 +195,57 @@ done
 
 VALIDATOR_ARGS=(--schema "$SCHEMA" --path "$ARTIFACT_PATH")
 PERMIT_NOTE=""
-PERMIT_TMP=""
-cleanup() {
-  [ -z "$PERMIT_TMP" ] || rm -rf "$PERMIT_TMP"
-}
-trap cleanup EXIT
 
 if [ "$(metadata_value "$SHOW_JSON" "gc.build.coverage_permits")" = "required" ]; then
   VALIDATOR_ARGS+=(--require-coverage-permits)
   REQUIREMENTS_PATH=""
-  for key in gc.build.requirements_path gc.var.requirements_path; do
-    value="$(metadata_value "$ROOT_JSON" "$key")"
-    [ -n "$value" ] || continue
-    case "$value" in
-      /*) ;;
-      *)
-        REQUIREMENTS_ROOT="$(rig_root)"
-        [ -n "$REQUIREMENTS_ROOT" ] || REQUIREMENTS_ROOT="${GC_WORK_DIR:-}"
-        [ -z "$REQUIREMENTS_ROOT" ] || value="$REQUIREMENTS_ROOT/$value"
-        ;;
-    esac
-    [ -f "$value" ] || fail "requirements artifact $value recorded at $key on workflow root ${ROOT_ID:-$BEAD_ID} does not exist; coverage permits cannot be checked"
-    REQUIREMENTS_PATH="$value"
-    break
+  # Walk from this step's workflow root up through the workflows that launched
+  # it. An implementation item root is created by a drain control bead of the
+  # parent workflow, and names it in gc.drain_control_id.
+  WALK_JSON="$ROOT_JSON"
+  WALK_ID="${ROOT_ID:-$BEAD_ID}"
+  WALKED="$WALK_ID"
+  for _hop in 1 2 3 4; do
+    for key in gc.build.requirements_path gc.var.requirements_path; do
+      value="$(metadata_value "$WALK_JSON" "$key")"
+      [ -n "$value" ] || continue
+      case "$value" in
+        /*) ;;
+        *)
+          REQUIREMENTS_ROOT="$(rig_root)"
+          [ -n "$REQUIREMENTS_ROOT" ] || REQUIREMENTS_ROOT="${GC_WORK_DIR:-}"
+          [ -z "$REQUIREMENTS_ROOT" ] || value="$REQUIREMENTS_ROOT/$value"
+          ;;
+      esac
+      [ -f "$value" ] || fail "requirements artifact $value recorded at $key on workflow root $WALK_ID does not exist; coverage permits cannot be checked"
+      REQUIREMENTS_PATH="$value"
+      break
+    done
+    [ -z "$REQUIREMENTS_PATH" ] || break
+    CONTROL_ID="$(metadata_value "$WALK_JSON" "gc.drain_control_id")"
+    [ -n "$CONTROL_ID" ] || break
+    rc=0
+    CONTROL_JSON="$(bd_show "$CONTROL_ID")" || rc=$?
+    [ "$rc" -ne "$EXIT_NO_VERDICT" ] || exit "$rc"
+    [ "$rc" -eq 0 ] || break
+    PARENT_ID="$(metadata_value "$CONTROL_JSON" "gc.root_bead_id")"
+    [ -n "$PARENT_ID" ] && [ "$PARENT_ID" != "$WALK_ID" ] || break
+    rc=0
+    WALK_JSON="$(bd_show "$PARENT_ID")" || rc=$?
+    [ "$rc" -ne "$EXIT_NO_VERDICT" ] || exit "$rc"
+    [ "$rc" -eq 0 ] || break
+    WALK_ID="$PARENT_ID"
+    WALKED="$WALKED, $WALK_ID"
   done
   if [ -n "$REQUIREMENTS_PATH" ]; then
     VALIDATOR_ARGS+=(--requirements "$REQUIREMENTS_PATH")
-    PERMIT_NOTE=" permits=$REQUIREMENTS_PATH"
+    PERMIT_NOTE=" requirements=$REQUIREMENTS_PATH"
   else
-    # No requirements artifact on this workflow: the source work item is the
-    # only statement of what was asked, so permits quote it.
-    SOURCE_ID="$(metadata_value "$ROOT_JSON" "gc.drain_member_id")"
-    [ -n "$SOURCE_ID" ] || SOURCE_ID="$(metadata_value "$ROOT_JSON" "gc.input_convoy_id")"
-    if [ -n "$SOURCE_ID" ] && SOURCE_JSON="$(gc bd show "$SOURCE_ID" --json 2>/dev/null)"; then
-      PERMIT_TMP="$(mktemp -d)"
-      printf '%s' "$SOURCE_JSON" | python3 -c '
-import json
-import sys
-
-try:
-    data = json.load(sys.stdin)
-except Exception:
-    raise SystemExit(0)
-if isinstance(data, list):
-    data = data[0] if data else {}
-if not isinstance(data, dict):
-    raise SystemExit(0)
-for field in ("title", "description", "acceptance_criteria", "design", "notes"):
-    value = data.get(field)
-    if isinstance(value, str) and value.strip():
-        print(value)
-        print()
-' >"$PERMIT_TMP/work-item-$SOURCE_ID.md"
-      VALIDATOR_ARGS+=(--requirements "$PERMIT_TMP/work-item-$SOURCE_ID.md")
-      PERMIT_NOTE=" permits=work-item:$SOURCE_ID"
-    fi
+    # No root records a requirements artifact. An artifact with nothing left
+    # open needs none; one that needs a permit is told what to record. The
+    # quote is never checked against the work item or any other text.
+    VALIDATOR_ARGS+=(--requirements-hint "no workflow root ($WALKED) records gc.build.requirements_path or gc.var.requirements_path. Record the requirements this build works from on the workflow root, then close the step again: gc bd update $WALK_ID --set-metadata gc.build.requirements_path=<absolute path to the requirements file>. If there is no requirements file, nothing can permit leaving a requirement open: do the work, or set the artifact status to blocked")
+    PERMIT_NOTE=" requirements=unresolved"
   fi
 fi
 

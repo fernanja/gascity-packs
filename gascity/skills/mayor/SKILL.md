@@ -71,10 +71,17 @@ IDs or formula targets in requirements.
 
 State hand-offs in the requirements themselves. If an acceptance criterion is
 checked after merge, by you, or by a later stage, or something is deliberately
-left out, say so in a full sentence. A plan or implementation summary may
-leave a requirement at any status other than `covered` only by quoting such a
-sentence as its `permit`; the build gate rejects every other deferral, so a
-hand-off that lives only in a source document or in your head blocks the build.
+left out, say so in a full sentence, in words the build gate recognises:
+"post-merge" or "after merge", "next round", "out of scope", "not in this
+work", "follow-up bead", "separate bead", "mayor-owned" or "the mayor checks",
+"Jon's decision", "deferred". A plan or implementation summary may leave a
+requirement at any status other than `covered` only by quoting such a sentence
+as its `permit`; the gate rejects every other deferral, including a quote of
+the requirement's own statement, so a hand-off that lives only in a source
+document or in your head blocks the build. Give each requirement and acceptance
+criterion a label of capitals, a hyphen and a number (`AC-1`, `SCOPE-2`,
+`REQ-3`) at the start of its list item or heading: the gate takes the ids from
+the requirements file and requires a coverage entry for each.
 
 When requirements forbid edits to a shared area (e.g. "no edits under
 `packages/ui`"), do not write a flat ban. Add a sanctioned exception: a minimal
