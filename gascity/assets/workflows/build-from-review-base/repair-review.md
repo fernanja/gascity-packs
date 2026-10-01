@@ -35,6 +35,42 @@ recorded review findings and implementation evidence until one of these happens:
 - review or repair returns blocked;
 - max_iterations is exhausted.
 
+One fix loop runs at a time per workflow root, and this step owns it from
+launch until its re-review verdict has been read:
+
+1. Before launching, read `gc.build.fix_loop_root_id` on the workflow root. If
+   it names a bead that is still open or in_progress, adopt that loop and wait
+   for it; do not launch another. A session restarted mid-wait has no memory
+   of the loop it launched, and this key is the only record of it (gc-75vzd: a
+   restarted operator launched a second loop for the same findings 15 minutes
+   after the first).
+2. Launch the loop as a standalone workflow, in exactly this shape:
+
+   ```bash
+   gc sling "<routed-to>" {{review_fix_formula}} --formula \
+     --var "findings_path=<most recent review or re-review report path>" \
+     --var "context_path=<implementation summary path, when one is recorded>" \
+     --var "implementation_formula={{implementation_formula}}" \
+     --var "implementation_target={{implementation_target}}" \
+     --var "code_review_formula={{code_review_formula}}" \
+     --var "max_iterations=<{{max_iterations}} minus fix attempts already made>"
+   ```
+
+   `<routed-to>` is this step bead's own `gc.routed_to` value. Never attach
+   the loop to a bead with `--on` — not to this step's claimed bead and not to
+   the source bead. When a workflow launched with `--on` finishes, the engine
+   closes the bead it was attached to. Attached to this step, that closes the
+   step under you with a pass outcome, drains this session, and lets the build
+   finalize while the next loop is still running (gc-bkybl: root gcas-6onr10
+   finalized blocked 10 minutes after its second fix loop started; the loop
+   went on to be approved with nothing left to publish it).
+3. Immediately after launch, record the new loop's root bead id as
+   `gc.build.fix_loop_root_id` on the workflow root.
+4. Keep this step open and claimed while that loop is open. When the loop
+   root closes, read the re-review artifact it produced. The loop root's own
+   `gc.outcome=pass` means only that the loop ran to its end; the verdict is in
+   the re-review artifact, as the next paragraph requires.
+
 The exit reason is whichever of the three happened, determined by re-reading
 the MOST RECENT re-review artifact's own verdict — never by whether the
 attempt counter reached max_iterations. A final attempt that is itself
