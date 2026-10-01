@@ -39,6 +39,18 @@ cannot be made to fail, the verdict is `blocked` with reason `cannot_reproduce`
 and the evidence gathered recorded: never `approved`, never a skip. Never
 demand evidence the repo cannot produce.
 
+Report the class of a defect, not only the instance. When you find one, look
+for every other occurrence of the same kind in the diff and in the code it
+touches, and list them all in the same finding (file and line for each), so
+one fix pass can close the class. Say what would make the defect impossible,
+not only what is wrong with this line. Naming one instance while its
+neighbours are in view costs a full extra round for each of them (gc-f6est:
+one test was sent back five times, one hole per review).
+
+When a finding is a narrower version of one raised earlier in this artifact
+root, say so, and state the acceptance test that settles the whole class: the
+condition under which it will not be raised again.
+
 For `review_mode=report`, write findings and verdicts without mutating code.
 For `review_mode=agent`, write a structured fix handoff for the caller or
 selected fix loop. For `review_mode=interactive`, safe fixes may be negotiated
