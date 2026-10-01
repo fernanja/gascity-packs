@@ -4,6 +4,16 @@ Review the implementation plan before decomposition. The verdict must map to
 approved, questions, changes_required, or blocked, and it must honor
 interaction_mode {{interaction_mode}}.
 
+Treat a deferred requirement as a blocking finding. Go through every
+requirement and acceptance criterion in the requirements artifact and find
+where the plan delivers it. If the plan marks one as deferred, out of scope,
+report-only, "later", or to be done by another stage, the verdict is
+`changes_required` unless the requirements artifact itself permits that
+deferral in so many words. Name the criterion and quote the plan sentence. A
+criterion the plan never mentions is the same finding (gc-gdyaz: a plan
+postponed a required check, the plan review approved it, and the code review
+found the gap three hours later).
+
 Check scope reachability: confirm every acceptance criterion can be met along
 the plan's traced call path without breaking the requirements' scope
 constraints (e.g. "no edits under X"). If a scope ban makes a criterion

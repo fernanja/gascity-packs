@@ -5,6 +5,19 @@ after fixes. Continue only while the iteration count is below
 `{{max_iterations}}`. Record the follow-up review report path on workflow root
 metadata as `gc.build.review_report_path` before closing.
 
+Start with the automated checks, before reading any code. Find the pull
+request for the work branch (`gh pr list --head <branch>`) and read its checks
+for the commit under review (`gh pr checks <number>`). If checks are still
+running, wait for them (`gh pr checks <number> --watch`) rather than reviewing
+a commit whose result is unknown. Every failed check on that commit is a
+required finding: name the job, the failing step and the decisive log lines,
+and return `changes_required` without spending the review on problems a
+machine has already reported (gc-68exu). Call a failure unrelated to the diff
+only with evidence: the same step failing on the default branch, or passing on
+a rerun of the same commit. If no pull request or no check run exists for the
+commit, say so in the report as missing evidence; do not treat silence as a
+pass.
+
 The preflight gate is not a test run for every kind of change. Find out what it
 actually executes in this repo before treating it as coverage (in the ascent
 repo, `make preflight-fast` runs no Django tests at all). For every test module

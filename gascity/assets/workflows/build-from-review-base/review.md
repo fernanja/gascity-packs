@@ -20,6 +20,24 @@ findings. This stage records the review result; the following `repair-review`
 stage owns any selected review-fix loop, restart handoff, or blocked repair
 state.
 
+Start with the automated checks, before reading any code. Find the pull
+request for the work branch (`gh pr list --head <branch>`) and read its checks
+for the commit under review (`gh pr checks <number>`). If checks are still
+running, wait for them (`gh pr checks <number> --watch`) rather than reviewing
+a commit whose result is unknown. Every failed check on that commit is a
+required finding: name the job, the failing step and the decisive log lines,
+and return `changes_required` without spending the review on problems a
+machine has already reported (gc-68exu). Call a failure unrelated to the diff
+only with evidence: the same step failing on the default branch, or passing on
+a rerun of the same commit. If no pull request or no check run exists for the
+commit, say so in the report as missing evidence; do not treat silence as a
+pass.
+
+A requirement the implementation summary marks deferred, not run, skipped or
+"left for a later stage" is a required finding unless the requirements
+artifact permits that deferral in so many words; name the requirement and
+quote the summary (gc-gdyaz).
+
 As part of this review, actually run the rig's full local-CI-equivalent gate
 yourself in the implementation worktree (not the launcher checkout) — `make
 preflight-fast` if the worktree's Makefile defines that target, otherwise
