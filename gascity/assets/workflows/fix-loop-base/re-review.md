@@ -18,6 +18,15 @@ a rerun of the same commit. If no pull request or no check run exists for the
 commit, say so in the report as missing evidence; do not treat silence as a
 pass.
 
+When the workflow publishes (push and open_pr both `true`), the step that
+handed you this commit could not close until
+`../assets/scripts/checks/pr-ci-green.sh` saw complete, green checks on the
+pull request head. That does not replace the reading above: the head can move
+after the gate ran, and a gate that recorded `skipped` proves nothing. Review
+the commit at the pull request head. If your checkout is on a different
+commit, stop and say so in the report rather than reviewing one commit while
+CI vouches for another.
+
 The preflight gate is not a test run for every kind of change. Find out what it
 actually executes in this repo before treating it as coverage (in the ascent
 repo, `make preflight-fast` runs no Django tests at all). For every test module

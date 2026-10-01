@@ -53,8 +53,14 @@ launch until its re-review verdict has been read:
      --var "implementation_formula={{implementation_formula}}" \
      --var "implementation_target={{implementation_target}}" \
      --var "code_review_formula={{code_review_formula}}" \
-     --var "max_iterations=<{{max_iterations}} minus fix attempts already made>"
+     --var "max_iterations=<{{max_iterations}} minus fix attempts already made>" \
+     --var "push={{push}}" \
+     --var "open_pr={{open_pr}}"
    ```
+
+   `push` and `open_pr` carry this build's publishing intent into the loop:
+   with both `true`, each fix pass must end with the branch pushed and its
+   pull request's checks green before the re-review starts (gc-68exu).
 
    `<routed-to>` is this step bead's own `gc.routed_to` value. Never attach
    the loop to a bead with `--on` — not to this step's claimed bead and not to

@@ -39,6 +39,14 @@ default = "review"
 description = "Maximum fix/review attempts."
 default = "10"
 
+[vars.push]
+description = "Publishing intent of the build under repair. With open_pr, true means each fix pass ends with the branch pushed and its pull request's checks green before re-review."
+default = "false"
+
+[vars.open_pr]
+description = "Publishing intent of the build under repair. See push."
+default = "false"
+
 [[steps]]
 id = "plan-fixes"
 title = "Plan review fixes"
@@ -51,6 +59,14 @@ title = "Apply review fixes"
 needs = ["plan-fixes"]
 metadata = { "gc.run_target" = "{{implementation_target}}" }
 description_file = "../assets/workflows/fix-loop-base/apply-fixes.md"
+
+[steps.check]
+max_attempts = 3
+
+[steps.check.check]
+mode = "exec"
+path = "../assets/scripts/checks/pr-ci-green.sh"
+timeout = "5m"
 
 [[steps]]
 id = "re-review"

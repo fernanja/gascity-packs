@@ -9,5 +9,9 @@ available.
 Direct implement does not run gap-analysis or review loops. Treat this as an
 explicit caller authorization to publish the direct implementation result, and
 use the same protected-branch, lease-safe push, sanitized PR title/body, and
-collision checks as the pack publish helper. If neither push nor open_pr is an
+collision checks as the pack publish helper. When push and open_pr are both
+opt-ins, the implementation step has already pushed the branch and opened a
+draft pull request with green checks (gc-68exu): do not open a second one;
+confirm its head is the commit being published and mark it ready
+(`gh pr ready <number>`). If neither push nor open_pr is an
 explicit opt-in, close with `gc.outcome=pass` without mutating remotes.

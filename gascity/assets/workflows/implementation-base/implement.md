@@ -21,6 +21,63 @@ checked-out branch to make validation pass locally. The only path from a
 worktree to `main` is a GitHub PR through the pack's normal publish step;
 nothing before that step may write to `main` directly, for any reason.
 
+Hand off with green CI (gc-68exu). This workflow was launched with push
+{{push}} and open_pr {{open_pr}}. When both are `true`, this step does not
+end at the commit. It ends when the commit is on GitHub, in a draft pull
+request, with every check green, so that review starts on a commit a machine
+has already passed:
+
+1. Push the work branch to `origin`. Let the repo's pre-push hooks run; never
+   bypass them, and never push to the default branch.
+2. Open a pull request for the branch against the default branch as a
+   **draft**, with the source bead id in the title (the bead this build was
+   dispatched for; the requirements artifact and the work item name it):
+   `gh pr create --draft --base <default-branch> --head <branch> --title "<what changed> (<source-bead-id>)"`.
+   If the branch already has an open pull request, use that one. Never open it
+   non-draft and never mark it ready: a merge sweep merges any clean non-draft
+   pull request, and this one has not been reviewed (gc-5gm0d: an
+   implementation worker opened a ready pull request while review, repair and
+   publish were all still open, and only a human converting it to draft kept
+   it unmerged). Marking it ready belongs exclusively to the publish step,
+   after review and repair-review approve.
+3. Wait for GitHub's checks on that commit: `gh pr checks <number> --watch`.
+   The command returns by itself when the checks finish, so it is not a
+   blocking command of the kind the shell rules forbid. If your shell tool
+   limits how long one call may run, run it in the background and wait for it
+   to exit, or run it again until it returns by itself. Do not replace it with
+   a fixed sleep or a long poll interval: a worker once sat an hour past the
+   end of a run that way. If it says no checks are reported yet, CI has not
+   registered; wait a minute and run it again.
+4. A failed check is yours to fix before anyone reviews. Read the failed job's
+   log (`gh run view <run-id> --log-failed`), fix the cause on the branch,
+   commit, push, and wait again. A failing test is fixed; it is never skipped,
+   quarantined or re-baselined away, and that includes a test that was already
+   failing before your change. If the failure is in CI's own machinery (a
+   runner that died, a download that timed out), you may rerun the failed job
+   once (`gh run rerun <run-id> --failed`) and must record in the summary that
+   you did, with the run URL and both results. The gate does not tell a flake
+   from a defect: a check that is still red is red.
+5. Before closing, run the gate yourself from the launcher rig root, the same
+   script the controller runs when this step closes:
+   `GC_BEAD_ID=<claimed-step-id> "$(gc formula list --json | python3 -c 'import json,os,sys; c=[os.path.join(os.path.dirname(p),"assets/scripts/checks/pr-ci-green.sh") for p in json.load(sys.stdin)["search_paths"]]; print([p for p in c if os.path.isfile(p)][-1])')"`.
+   It must print `PASS` for the commit at your worktree's `HEAD`. Record the
+   pull request URL, the head sha and that `PASS` line in the summary's
+   `## Verification`. A criterion such as "the pull request's checks are
+   green" is then `covered`, with the run as evidence.
+
+When push or open_pr is not `true`, do not open a pull request; the gate then
+records `skipped: no publishing intent` and passes. If the branch has an open
+pull request anyway, the gate still requires its checks to be green.
+
+The handoff gate is `../assets/scripts/checks/implementation-handoff-valid.sh`:
+the artifact validator described below, then
+`../assets/scripts/checks/pr-ci-green.sh`. The controller does not wait for
+CI. A step closed while a check is unfinished or red fails the gate and comes
+back as a new attempt with the failing checks in `gc.attempt_log`; after three
+attempts the step fails and review does not start. A concrete methodology
+pack that overrides this step keeps this handoff or replaces it with its own
+equivalent gate.
+
 Write the per-item implementation summary as a
 `gc.build.implementation-summary.v1` artifact at a bead-scoped path outside
 the repo's tracked tree: `{{summary_path}}` when set, else

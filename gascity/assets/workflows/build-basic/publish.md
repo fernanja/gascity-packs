@@ -21,4 +21,10 @@ gc bd update "$CLAIMED_BEAD_ID" \
 gc bd close "$CLAIMED_BEAD_ID" --reason 'Publishing disabled; build-basic result approved.'
 ```
 
+When push and open_pr are both enabled, the implementation step has already
+pushed the branch and opened a draft pull request with green checks
+(gc-68exu). Do not open a second one: confirm its head is the approved commit
+and mark it ready (`gh pr ready <number>`). When the build did not finalize
+approved, leave the draft as it is.
+
 Close only after the push, PR creation, or no-op publish result is recorded.

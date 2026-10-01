@@ -58,6 +58,27 @@ right commit without checking. Follow this protocol exactly:
    workflow root before closing -- this is the sha a PR title/body may
    truthfully claim as published.
 
+**The pull request usually exists already, as a draft (gc-68exu).** When the
+workflow publishes, the implementation stage opens the pull request as a draft
+so CI runs before review. So before opening anything, and only after steps 1-5
+above have confirmed the remote branch tip equals
+`gc.build.review_subject_commit`, look for it:
+`gh pr list --head <branch> --state open --json number,isDraft,headRefOid,url`.
+
+- One open pull request: do not open a second. Confirm its `headRefOid` equals
+  `gc.build.review_subject_commit`; if it does not, fail exactly as step 4
+  describes, naming both shas. Bring its title (it must contain the source
+  bead id) and body up to date, then mark it ready for review:
+  `gh pr ready <number>`. Record its URL and the pushed sha the same way a
+  newly opened pull request is recorded.
+- No open pull request: open one, as before.
+- More than one: fail closed and name them; do not guess which one carries
+  the approved commit.
+- If `open_pr` is not authorized, or finalize recorded a blocked, failed or
+  repairable outcome, leave an existing draft exactly as it is: do not mark it
+  ready and do not close it. A draft is what keeps unapproved work from being
+  merged.
+
 **Report what the pre-push checks actually said (gc-4kgy1).** When a push runs
 the repo's pre-push hooks, keep their output and quote the decisive lines in
 this step's close reason: each hook's pass/fail line and, for a test run, the

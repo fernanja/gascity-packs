@@ -145,12 +145,12 @@ METHODOLOGY_STAGE_CONTRACTS = {
     "implementation-base": {
         "steps": ["prepare-worktree", "implement", "close-source-anchor"],
         "target_required": True,
-        "vars": {"context_path", "implementation_target", "summary_path"},
+        "vars": {"context_path", "implementation_target", "summary_path", "push", "open_pr"},
     },
     "implementation-item-base": {
         "steps": ["implement-item"],
         "target_required": True,
-        "vars": {"context_path", "implementation_target"},
+        "vars": {"context_path", "implementation_target", "push", "open_pr"},
     },
     "code-review-base": {
         "steps": ["validate-context", "write-report"],
@@ -174,6 +174,8 @@ METHODOLOGY_STAGE_CONTRACTS = {
             "implementation_target",
             "code_review_formula",
             "max_iterations",
+            "push",
+            "open_pr",
         },
     },
 }
@@ -234,7 +236,30 @@ MANUAL_BUILD_ARTIFACT_CHECK_COMMAND = (
 # stricter check than the shared BUILD_ARTIFACT_CHECK_SCRIPT / "5m" default.
 BUILD_ARTIFACT_GATE_CHECK_OVERRIDES = {
     ("review", "write-report"): ("../assets/scripts/checks/preflight-evidence-valid.sh", "20m"),
+    # The steps that end implementation chain the artifact gate with the
+    # CI-green handoff gate (gc-68exu).
+    ("implementation-base", "implement"): ("../assets/scripts/checks/implementation-handoff-valid.sh", "5m"),
+    ("do-work", "implement"): ("../assets/scripts/checks/implementation-handoff-valid.sh", "5m"),
+    ("implementation-item-base", "implement-item"): ("../assets/scripts/checks/implementation-handoff-valid.sh", "5m"),
+    ("do-work-item", "implement-item"): ("../assets/scripts/checks/implementation-handoff-valid.sh", "5m"),
 }
+
+# Steps that hand a commit to review close only on green GitHub checks
+# (gc-68exu): formula -> step -> (check script, step doc).
+CI_GREEN_HANDOFF_STEPS = {
+    ("implementation-base", "implement"): ("implementation-handoff-valid.sh", "implementation-base/implement.md"),
+    ("do-work", "implement"): ("implementation-handoff-valid.sh", "do-work/implement.md"),
+    ("implementation-item-base", "implement-item"): (
+        "implementation-handoff-valid.sh",
+        "implementation-item-base/implement-item.md",
+    ),
+    ("do-work-item", "implement-item"): ("implementation-handoff-valid.sh", "do-work-item/implement-item.md"),
+    ("fix-loop-base", "apply-fixes"): ("pr-ci-green.sh", "fix-loop-base/apply-fixes.md"),
+}
+MANUAL_PR_CI_GREEN_COMMAND = (
+    "GC_BEAD_ID=<claimed-step-id> "
+    '"$(gc formula list --json | python3 -c \'import json,os,sys; c=[os.path.join(os.path.dirname(p),"assets/scripts/checks/pr-ci-green.sh") for p in json.load(sys.stdin)["search_paths"]]; print([p for p in c if os.path.isfile(p)][-1])\')"'
+)
 
 # One produce attempt plus two bounded schema-repair attempts per artifact stage.
 BUILD_ARTIFACT_GATE_MAX_ATTEMPTS = 3
@@ -2039,22 +2064,158 @@ class FormulaAssetTests(unittest.TestCase):
             with self.subTest(fragment=fragment):
                 self.assertIn(fragment, text)
 
-    def test_shared_drain_item_step_never_opens_pr(self) -> None:
-        # gc-5gm0d: a shared-drain implementation worker opened
+    def test_implementation_steps_open_only_a_draft_pr_and_never_mark_it_ready(self) -> None:
+        # gc-5gm0d: a shared-drain implementation worker opened a ready
         # fernanja/ascent_app#2459 while build-from-plan's own
-        # implement/review/repair-review/publish steps were all still
-        # open; an automated merge sweep could have squash-merged it the
-        # moment CI went green. PR creation belongs exclusively to the
-        # publish step, never the single-item implementation step.
+        # implement/review/repair-review/publish steps were all still open;
+        # an automated merge sweep could have squash-merged it the moment CI
+        # went green, and only a human converting it to draft prevented that.
+        # gc-68exu then needed CI to run before review, which needs a pull
+        # request: the implementation step opens it as a DRAFT (the sweep
+        # skips drafts), and marking it ready stays with the publish step.
         root = pathlib.Path(__file__).resolve().parents[1]
-        for formula in ("implementation-item-base", "do-work-item"):
+        for formula in ("implementation-base", "do-work", "implementation-item-base", "do-work-item"):
             with self.subTest(formula=formula):
                 text = effective_formula_text(root, formula)
-                self.assertIn(
-                    "This step must not open a GitHub pull request itself, draft or otherwise",
-                    text,
+                for fragment in (
+                    "`gh pr create --draft --base <default-branch> --head <branch>",
+                    "with the source bead id in the title",
+                    "Never open it\n   non-draft and never mark it ready",
+                    "gc-5gm0d",
+                    "Marking it ready belongs exclusively to the publish step",
+                    "When push or open_pr is not `true`, do not open a pull request",
+                ):
+                    self.assertIn(fragment, text)
+                self.assertNotIn("gh pr ready", text)
+                self.assertNotIn("draft or otherwise", text)
+
+    def test_handoff_steps_are_gated_on_green_ci(self) -> None:
+        root = pathlib.Path(__file__).resolve().parents[1]
+
+        for (formula_name, step_id), (script, doc) in CI_GREEN_HANDOFF_STEPS.items():
+            with self.subTest(formula=formula_name, step=step_id):
+                formula = load_formula(root, formula_name)
+                step = {node["id"]: node for node in formula["steps"]}[step_id]
+                self.assertEqual(step["check"]["max_attempts"], 3)
+                self.assertEqual(
+                    step["check"]["check"],
+                    {"mode": "exec", "path": f"../assets/scripts/checks/{script}", "timeout": "5m"},
                 )
-                self.assertIn("belong exclusively to the publish", text)
+                for var_name in ("push", "open_pr"):
+                    self.assertEqual(formula["vars"][var_name]["default"], "false")
+                # Compare on one line: these paragraphs are re-wrapped per doc.
+                text = " ".join((root / "assets" / "workflows" / doc).read_text(encoding="utf-8").split())
+                for fragment in (
+                    "gc-68exu",
+                    "push {{push}} and open_pr {{open_pr}}",
+                    "`gh pr checks <number> --watch`",
+                    "The command returns by itself when the checks finish",
+                    "Do not replace it with a fixed sleep or a long poll interval",
+                    "you may rerun the failed job once (`gh run rerun <run-id> --failed`) and must record",
+                    "The gate does not tell a flake from a defect: a check that is still red is red.",
+                    MANUAL_PR_CI_GREEN_COMMAND,
+                    "../assets/scripts/checks/pr-ci-green.sh",
+                    "controller does not wait for CI.",
+                    "skipped: no publishing intent",
+                    # Fix-in-place stays: the handoff text offers no way
+                    # around a failing test, pre-existing or not.
+                    "A failing test is fixed; it is never skipped, quarantined or re-baselined away, "
+                    "and that includes a test that was already failing before",
+                ):
+                    self.assertIn(fragment, text, f"{doc} lost: {fragment}")
+
+        # The wrapper really chains both gates, artifact first.
+        wrapper = (root / "assets" / "scripts" / "checks" / "implementation-handoff-valid.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertLess(
+            wrapper.index('"$SCRIPT_DIR/build-artifact-valid.sh" || exit 1'),
+            wrapper.index('"$SCRIPT_DIR/pr-ci-green.sh" || exit 1'),
+        )
+
+    def test_review_family_reaches_every_review_through_a_gated_handoff(self) -> None:
+        # build-from-plan / -decompose / -convoy: the first review follows the
+        # implement drain, whose items run do-work (separate sessions) or
+        # do-work-item (one shared session); every later review is the fix
+        # loop's re-review, which follows apply-fixes.
+        root = pathlib.Path(__file__).resolve().parents[1]
+        for formula_name in ("build-from-plan", "build-from-decompose", "build-from-convoy"):
+            with self.subTest(formula=formula_name):
+                formula = resolve_formula(root, formula_name)
+                steps = {step["id"]: step for step in formula["steps"]}
+                self.assertEqual(steps["implement"]["drain"]["formula"], "do-work")
+                self.assertEqual(steps["implement-same-session"]["drain"]["formula"], "do-work-item")
+                self.assertEqual(steps["prepare-review"]["needs"], ["implement", "implement-same-session"])
+                self.assertEqual(steps["review"]["needs"], ["prepare-review"])
+                self.assertEqual(formula["vars"]["review_fix_formula"]["default"], "fix-loop-base")
+                for var_name in ("push", "open_pr"):
+                    self.assertIn(var_name, formula["vars"])
+
+        fix_loop = load_formula(root, "fix-loop-base")
+        steps = {step["id"]: step for step in fix_loop["steps"]}
+        self.assertEqual(steps["re-review"]["needs"], ["apply-fixes"])
+        self.assertEqual(
+            pathlib.PurePosixPath(steps["apply-fixes"]["check"]["check"]["path"]).name, "pr-ci-green.sh"
+        )
+
+        apply_fixes = (root / "assets/workflows/fix-loop-base/apply-fixes.md").read_text(encoding="utf-8")
+        for fragment in (
+            "or whenever the branch under repair already has an open pull\nrequest",
+            '--set-metadata "gc.build.handoff_commit=$(git rev-parse HEAD)" --set-metadata "gc.build.handoff_branch=<branch>"',
+            "Leave a draft a draft: marking it ready belongs exclusively to the\n   publish step.",
+            "the re-review does not start",
+            "run `git checkout --detach` in your own directory",
+        ):
+            with self.subTest(fragment=fragment):
+                self.assertIn(fragment, apply_fixes)
+
+        # The build passes its publishing intent into the loop it launches.
+        for formula_name in ("build-from-plan", "build-from-review"):
+            repair = rendered_step_text(root, formula_name, "repair-review")
+            with self.subTest(formula=formula_name, step="repair-review"):
+                self.assertIn('--var "push={{push}}" \\\n     --var "open_pr={{open_pr}}"', repair)
+
+        # Reviewers still read CI themselves and review the commit CI ran on.
+        for doc in ("build-from-review-base/review.md", "fix-loop-base/re-review.md"):
+            text = (root / "assets" / "workflows" / doc).read_text(encoding="utf-8")
+            with self.subTest(doc=doc):
+                self.assertIn("Start with the automated checks, before reading any code.", text)
+                self.assertIn("a gate that recorded `skipped` proves nothing", text)
+                self.assertIn("Review\nthe commit at the pull request head.", text)
+
+    def test_publish_marks_the_existing_draft_ready_instead_of_opening_a_second_pr(self) -> None:
+        root = pathlib.Path(__file__).resolve().parents[1]
+        for formula_name in ("build-from-plan", "build-from-decompose", "build-from-review"):
+            text = rendered_step_text(root, formula_name, "publish")
+            for fragment in (
+                # Every safety rule the publish step already had.
+                "Read `gc.build.review_subject_commit` on the workflow root. This is the\n   ONLY source of truth for the approved commit",
+                "git ls-remote origin",
+                "fast-forward push `gc.build.review_subject_commit` to",
+                "do NOT open a PR, do NOT report `not_published`/`noop`",
+                "gc.build.publish_pushed_commit",
+                "never skip or bypass a hook to\nget the push through",
+                # The draft opened by the implementation stage.
+                "The pull request usually exists already, as a draft (gc-68exu).",
+                "`gh pr list --head <branch> --state open --json number,isDraft,headRefOid,url`",
+                "One open pull request: do not open a second.",
+                "Confirm its `headRefOid` equals\n  `gc.build.review_subject_commit`",
+                "`gh pr ready <number>`",
+                "No open pull request: open one, as before.",
+                "More than one: fail closed and name them",
+                "leave an existing draft exactly as it is: do not mark it\n  ready and do not close it",
+            ):
+                with self.subTest(formula=formula_name, fragment=fragment):
+                    self.assertIn(fragment, text)
+            self.assertLess(
+                text.index("Only after the remote branch tip is confirmed to equal"),
+                text.index("The pull request usually exists already, as a draft"),
+            )
+        for doc in ("implement/publish.md", "build-basic/publish.md"):
+            text = (root / "assets" / "workflows" / doc).read_text(encoding="utf-8")
+            with self.subTest(doc=doc):
+                self.assertIn("gc-68exu", text)
+                self.assertIn("`gh pr ready <number>`", text)
 
     # gc-50j4j (R13 retro): build-from-plan and build-basic have no shared
     # plan/plan-review/decompose/repair file (each overrides its own), so the
@@ -4719,7 +4880,9 @@ description = "Override sink that writes the base triage report contract."
                 "build-artifact-valid.sh",
                 "design-review-approved.sh",
                 "gap-analysis-approved.sh",
+                "implementation-handoff-valid.sh",
                 "implementation-review-approved.sh",
+                "pr-ci-green.sh",
                 "preflight-evidence-valid.sh",
             ],
         )

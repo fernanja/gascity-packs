@@ -23,6 +23,14 @@ default = ""
 description = "Role target for implementation work."
 default = "gc.implementation-worker"
 
+[vars.push]
+description = "Publishing intent inherited from the launching workflow. With open_pr, true means implementation ends with the branch pushed and a draft pull request whose checks are green."
+default = "false"
+
+[vars.open_pr]
+description = "Publishing intent inherited from the launching workflow. See push."
+default = "false"
+
 [[steps]]
 id = "implement-item"
 title = "Implement shared-drain item"
@@ -34,5 +42,5 @@ max_attempts = 3
 
 [steps.check.check]
 mode = "exec"
-path = "../assets/scripts/checks/build-artifact-valid.sh"
+path = "../assets/scripts/checks/implementation-handoff-valid.sh"
 timeout = "5m"
