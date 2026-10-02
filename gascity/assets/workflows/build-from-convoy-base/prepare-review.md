@@ -10,10 +10,27 @@ consume the implementation evidence without inspecting drain internals.
 
 ## Closing this gate
 
-This step is a member of the build scope with `gc.on_fail=abort_scope`. Its own
-`gc.outcome` decides whether the build continues, so always set it before
-closing. A bead closed with no `gc.outcome`, or with any value other than
-`pass`, counts as a failure and stops the build.
+This step is a gate in the build's review scope and carries
+`gc.on_fail=abort_scope`. Its own `gc.outcome` decides whether the build
+continues, so always set it before closing. A bead closed with no
+`gc.outcome`, or with any value other than `pass`, counts as a failure and
+stops the build.
+
+**The planning half stopped.** Check this before validating anything. The
+planning half stopped when the workflow root carries `gc.build.blocked_step`
+naming a step before the drain, or when the implementation drain this step depends on closed with
+`gc.failure_reason=upstream_native_dependency_failed`: that drain never ran.
+There is nothing to review. Do not validate, and do not record anything on
+the workflow root: the step that stopped the build recorded the cause, or
+`finalize` will. Close this step with
+`gc bd update "<claimed-step-id>" --set-metadata "gc.outcome=fail"`, then
+`gc bd close "<claimed-step-id>" --reason "planning stopped; nothing to review"`.
+
+**A drain that closed failed after running.** A drain closes
+`gc.outcome=fail` when any work item failed. That alone is not a reason to
+fail this gate. Decide from the evidence: pass when implementation evidence
+exists for the work that was done, and let `review` and `repair-review` deal
+with what is missing or broken.
 
 **Validation passed.** Run
 `gc bd update "<claimed-step-id>" --set-metadata "gc.outcome=pass"`, then
@@ -34,19 +51,19 @@ gc bd update "<workflow-root-id>" \
 
 | What failed | `gc.failure_class` | `gc.restart.entrypoint` |
 | --- | --- | --- |
-| The drain produced no implementation evidence and none can be rebuilt | `implementation_evidence_missing` | `build-from-convoy` |
+| The drain ran but produced no implementation evidence, and none can be rebuilt | `implementation_evidence_missing` | `build-from-convoy` |
 | An input the review suffix requires is missing | `review_inputs_invalid` | `build-from-review` |
 
-Fail this gate only when the evidence cannot be recovered. When the drain
-passed and its commits exist but the recorded summary file is gone (it lived
-in a worktree that was reaped), rebuild the summary under `{{artifact_root}}`
-from the drain item roots (commit shas, changed files, verification run),
-record that path on the workflow root, and pass. A failure here stops the
-build before review.
+Fail this gate only when the evidence cannot be recovered. When the drain's
+commits exist but the recorded summary file is gone (it lived in a worktree
+that was reaped), rebuild the summary under `{{artifact_root}}` from the
+drain item roots (commit shas, changed files, verification run), record that
+path on the workflow root, and pass. A failure here stops the build before
+review.
 
 Then close this step as failed:
 `gc bd update "<claimed-step-id>" --set-metadata "gc.outcome=fail"`, then
 `gc bd close "<claimed-step-id>" --reason "<what failed and where to restart>"`.
-The engine skips every later build step and runs `finalize` once. Finalize
-writes the blocked report from what this step recorded, so the values above
-are what the next person restarts from.
+The engine skips `review` and `repair-review` and runs `finalize` once.
+Finalize writes the blocked report from what this step recorded, so the
+values above are what the next person restarts from.

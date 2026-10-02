@@ -18,6 +18,9 @@ known, current review report path, and the exact continuation entrypoint to
 restart from. Record at least:
 
 - `gc.build.repair_status=repairable`
+- `gc.build.status=blocked`
+- `gc.build.blocked_step=repair-review`
+- `gc.failure_class=review_changes_required`
 - `gc.restart.entrypoint=build-from-review`
 - `gc.restart.reason=review_changes_required`
 - `gc.restart.review_report_path=<review report path>`
@@ -154,9 +157,9 @@ at a default/pass outcome while recording blocked/exhausted on the root.
 
 If any prerequisite review artifact, implementation evidence, or selected
 formula is missing, do not invent a pass. Read the workflow root first. If it
-already carries `gc.build.status=blocked` with a `gc.failure_class` and a
-`gc.restart.entrypoint`, an earlier step stopped the build and recorded the
-cause (`gc.build.blocked_step` names it). Keep that `gc.failure_class`,
+already carries a `gc.failure_class` or a `gc.restart.entrypoint`, an earlier
+step stopped the build and recorded the cause (`gc.build.blocked_step` names
+it when a gate did). Keep that `gc.failure_class`,
 `gc.restart.entrypoint`, and `gc.restart.reason` exactly as recorded: the
 missing prerequisite here is a consequence of that stop, and overwriting the
 record sends the restart to the wrong entrypoint (gc-2ua7i: a build stopped by
@@ -164,7 +167,8 @@ a rejected plan ended with `gc.restart.entrypoint=build-from-review`). In that
 case record only `gc.build.repair_status=blocked` and close this step's own
 claimed bead with `gc.outcome=fail`.
 
-Otherwise record `gc.build.repair_status=blocked`,
+Otherwise record `gc.build.repair_status=blocked`, `gc.build.status=blocked`,
+`gc.build.blocked_step=repair-review`,
 `gc.outcome=fail`, `gc.failure_class=review_repair_blocked`,
 `gc.restart.entrypoint=build-from-review`, and `gc.restart.reason` with the
 machine-readable blocked reason. `review_repair_blocked` means a prerequisite
@@ -174,7 +178,23 @@ failures.
 
 Do not close the workflow root with `gc.outcome=pass` from this stage.
 
-This step is a member of the build scope with `gc.on_fail=abort_scope`: always
-set `gc.outcome` on this step's own claimed bead before closing it. Use `pass`
-only when `gc.build.repair_status` is `not_needed` or `approved`. A bead closed
-with no `gc.outcome` counts as a failure and the build finalizes as blocked.
+## Closing this step
+
+Every stop this step records on the workflow root (report-mode `repairable`,
+`exhausted`, or `blocked`) also records `gc.build.status=blocked` and
+`gc.build.blocked_step=repair-review` next to its `gc.failure_class` and
+`gc.restart.*` values. Finalize keeps a recorded stop and derives one only
+when none is recorded.
+
+Always set `gc.outcome` on this step's own claimed bead before closing it:
+
+- `gc.build.repair_status` is `not_needed` or `approved`:
+  `gc bd update "<claimed-step-id>" --set-metadata "gc.outcome=pass"`, then
+  `gc bd close "<claimed-step-id>" --reason "<concise reason>"`.
+- Any other `gc.build.repair_status`:
+  `gc bd update "<claimed-step-id>" --set-metadata "gc.outcome=fail"`, then
+  `gc bd close "<claimed-step-id>" --reason "<concise reason>"`.
+
+A bead closed with no `gc.outcome` does not fail the build by itself: finalize
+and publish then decide from the workflow root metadata alone. Never rely on
+that for a blocked, exhausted, or repairable result.

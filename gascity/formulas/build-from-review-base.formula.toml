@@ -89,33 +89,31 @@ default = "false"
 description = "Set true to allow final PR creation after all checks pass."
 default = "false"
 
-# Build scope (gc-2ua7i). Every step before `finalize` is a member of this
-# scope, so a member that closes with a failed outcome stops the build: the
-# engine skips the members that have not run and closes `body` with
-# gc.outcome=fail. `finalize` needs `body`, so it runs once either way.
-# Worker-closed members also carry gc.on_fail=abort_scope (a missing gc.outcome
-# counts as a failure). Checked steps and drains do not: the engine closes them
-# with an explicit gc.outcome and copies step metadata onto re-spawned attempts.
-# A formula that overrides or adds a step before `finalize` must keep it in the
-# scope; see "Stopping On A Failed Step" in ../REQUIREMENTS.md.
+# Review scope (gc-2ua7i). `prepare-review`, `review` and `repair-review` are
+# members of this scope. When `prepare-review` closes with a failed outcome the
+# engine skips `review` and `repair-review` and closes `review-body` with
+# gc.outcome=fail. `finalize` needs `review-body`, so it runs once either way.
+# Only the `prepare-*` gates carry gc.on_fail=abort_scope (a missing gc.outcome
+# counts as a failure). The other members stop the build only with an explicit
+# gc.outcome=fail. See "Stopping On A Failed Step" in ../REQUIREMENTS.md.
 [[steps]]
-id = "body"
-title = "Build work scope"
+id = "review-body"
+title = "Build review scope"
 needs = ["repair-review"]
-metadata = { "gc.kind" = "scope", "gc.scope_name" = "build", "gc.scope_role" = "body" }
-description_file = "../assets/workflows/build-from-review-base/body.md"
+metadata = { "gc.kind" = "scope", "gc.scope_name" = "build-review", "gc.scope_role" = "body" }
+description_file = "../assets/workflows/build-from-review-base/review-body.md"
 
 [[steps]]
 id = "prepare-review"
 title = "Validate review continuation inputs"
-metadata = { "gc.scope_ref" = "body", "gc.scope_role" = "member", "gc.on_fail" = "abort_scope", "gc.run_target" = "gc.run-operator" }
+metadata = { "gc.scope_ref" = "review-body", "gc.scope_role" = "member", "gc.on_fail" = "abort_scope", "gc.run_target" = "gc.run-operator" }
 description_file = "../assets/workflows/build-from-review-base/prepare-review.md"
 
 [[steps]]
 id = "review"
 title = "Review continuation implementation"
 needs = ["prepare-review"]
-metadata = { "gc.scope_ref" = "body", "gc.scope_role" = "member", "gc.run_target" = "gc.implementation-reviewer", "gc.build.artifact_schema" = "gc.build.review.v1", "gc.build.artifact_path_keys" = "gc.build.review_report_path" }
+metadata = { "gc.scope_ref" = "review-body", "gc.scope_role" = "member", "gc.run_target" = "gc.implementation-reviewer", "gc.build.artifact_schema" = "gc.build.review.v1", "gc.build.artifact_path_keys" = "gc.build.review_report_path" }
 description_file = "../assets/workflows/build-from-review-base/review.md"
 
 [steps.check]
@@ -130,13 +128,13 @@ timeout = "5m"
 id = "repair-review"
 title = "Repair or block continuation review findings"
 needs = ["review"]
-metadata = { "gc.scope_ref" = "body", "gc.scope_role" = "member", "gc.on_fail" = "abort_scope", "gc.run_target" = "gc.run-operator" }
+metadata = { "gc.scope_ref" = "review-body", "gc.scope_role" = "member", "gc.run_target" = "gc.run-operator" }
 description_file = "../assets/workflows/build-from-review-base/repair-review.md"
 
 [[steps]]
 id = "finalize"
 title = "Finalize continuation result"
-needs = ["body"]
+needs = ["review-body"]
 metadata = { "gc.run_target" = "gc.run-operator", "gc.build.artifact_schema" = "gc.build.final-report.v1", "gc.build.artifact_path_keys" = "gc.build.final_report_path" }
 description_file = "../assets/workflows/build-from-review-base/finalize.md"
 

@@ -542,30 +542,54 @@ preserving the downstream suffix handoff.
 
 ### Stopping On A Failed Step
 
-A failed step stops the build. In every continuation base, each step before
-`finalize` is a member of one scope whose body is the `body` step declared in
-`build-from-review-base` (`gc.kind = "scope"`, `gc.scope_role = "body"`,
-`needs = ["repair-review"]`). `finalize` needs `body`, and `publish` needs
-`finalize`. Neither is a scope member.
+A failed planning step stops the build before anything is implemented, and a
+failed review gate stops it before review. The continuation bases declare two
+scopes and leave the implementation drain outside both:
 
-| Step shape | Step metadata | Why |
+| Scope body | Declared in | Members | Body needs |
+| --- | --- | --- | --- |
+| `planning-body` | `build-from-convoy-base` | every step before the drain: `prepare-requirements`, `requirements`, `prepare-plan`, `plan`, `plan-review`, `prepare-decompose`, `decompose`, `prepare-convoy` (those the entrypoint has) | `prepare-convoy` |
+| `review-body` | `build-from-review-base` | `prepare-review`, `review`, `repair-review` | `repair-review` |
+
+The drains (`implement`, `implement-same-session`) need `planning-body` and
+are not scope members. `finalize` needs `review-body`, and `publish` needs
+`finalize`; neither is a scope member.
+
+| Step shape | Step metadata | Stops the build when it closes |
 | --- | --- | --- |
-| Worker-closed step (`prepare-*`, `plan-review`, `repair-review`) | `gc.scope_ref = "body"`, `gc.scope_role = "member"`, `gc.on_fail = "abort_scope"` | A missing or unknown `gc.outcome` counts as a failure. |
-| Checked step (`[steps.check]`) and drain step (`[steps.drain]`) | `gc.scope_ref = "body"`, `gc.scope_role = "member"` | The engine closes these and always writes `gc.outcome`. The engine also copies step metadata onto each re-spawned attempt bead, so `abort_scope` here would stop a healthy build when a second attempt is closed with no `gc.outcome`. |
+| `prepare-*` gate | `gc.scope_ref`, `gc.scope_role = "member"`, `gc.on_fail = "abort_scope"` | with `gc.outcome=fail`, with no `gc.outcome`, or with an unknown value |
+| Any other member (`plan-review`, `repair-review`, and every checked step) | `gc.scope_ref`, `gc.scope_role = "member"` | with `gc.outcome=fail` only |
+| Drain | no scope metadata | never; `prepare-review` decides from the evidence |
 
-When a member closes with `gc.outcome=fail`, the engine closes every member
-that has not run with `gc.outcome=skipped`, closes `body` with
-`gc.outcome=fail`, and `finalize` runs once. The step that stops the build
-records `gc.build.status=blocked`, `gc.build.blocked_step`, `gc.failure_class`,
-`gc.restart.entrypoint`, and `gc.restart.reason` on the workflow root. Later
-steps keep that record. `finalize` closes its own bead with `gc.outcome=pass`
-once a valid report is written, including a `status: blocked` report.
+When a member stops its scope, the engine closes the members that have not
+run with `gc.outcome=skipped` and closes the scope body with
+`gc.outcome=fail`. After a planning stop the drain's own upstream check closes
+it without dispatching work, `prepare-review` ends the review scope without a
+review, and `finalize` runs once. A drain that closes `fail` because a work
+item failed stops nothing: `prepare-review` runs exactly as it did before the
+scopes existed, and the workflow outcome is not affected by the drain's own
+outcome.
 
-A formula that extends a continuation base and overrides or adds a step before
-`finalize` must give that step the metadata in the table. Overriding a step
-replaces the whole step, including its metadata. A step left outside the scope
-still runs after the build has stopped, and `body` must only need scope
-members. `build-base` and the formulas that extend it do not use this scope.
+The step that stops the build records `gc.build.status=blocked`,
+`gc.build.blocked_step`, `gc.failure_class`, `gc.restart.entrypoint`, and
+`gc.restart.reason` on the workflow root. Later steps keep that record.
+`finalize` closes its own bead with `gc.outcome=pass` once a valid report is
+written, including a `status: blocked` report.
+
+Checked steps do not carry `gc.on_fail = "abort_scope"`: the engine writes
+their control's `gc.outcome`, and it copies step metadata onto each re-spawned
+attempt bead, so `abort_scope` would stop a healthy build when a second
+attempt is closed with no `gc.outcome`. Known engine limits of scope
+membership, which the pack cannot remove: a second or later attempt that
+closes with an explicit `gc.outcome=fail` stops the scope while attempts
+remain, and a member control or scope-check that the dispatcher quarantines
+stops the scope.
+
+A formula that extends a continuation base and overrides or adds a step must
+give it the metadata in the tables. Overriding a step replaces the whole step,
+including its metadata. A step left outside its scope still runs after the
+build has stopped, and a scope body must only need members of its own scope.
+`build-base` and the formulas that extend it do not use these scopes.
 
 ## Methodology Metadata Contract
 

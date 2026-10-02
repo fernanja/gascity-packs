@@ -12,10 +12,11 @@ Close only after the plan stage can write or reuse the selected plan artifact.
 
 ## Closing this gate
 
-This step is a member of the build scope with `gc.on_fail=abort_scope`. Its own
-`gc.outcome` decides whether the build continues, so always set it before
-closing. A bead closed with no `gc.outcome`, or with any value other than
-`pass`, counts as a failure and stops the build.
+This step is a gate in the build's planning scope and carries
+`gc.on_fail=abort_scope`. Its own `gc.outcome` decides whether the build
+continues, so always set it before closing. A bead closed with no
+`gc.outcome`, or with any value other than `pass`, counts as a failure and
+stops the build.
 
 **Validation passed.** Run
 `gc bd update "<claimed-step-id>" --set-metadata "gc.outcome=pass"`, then
@@ -45,6 +46,8 @@ paths: this entrypoint consumes requirements, it does not write them.
 Then close this step as failed:
 `gc bd update "<claimed-step-id>" --set-metadata "gc.outcome=fail"`, then
 `gc bd close "<claimed-step-id>" --reason "<what failed and where to restart>"`.
-The engine skips every later build step and runs `finalize` once. Finalize
-writes the blocked report from what this step recorded, so the values above
-are what the next person restarts from.
+The engine skips the planning steps that have not run, and the implementation
+drain closes without dispatching any work. `prepare-review` then ends the
+build without a review, and `finalize` runs once. Finalize writes the blocked
+report from what this step recorded, so the values above are what the next
+person restarts from.

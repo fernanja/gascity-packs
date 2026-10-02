@@ -29,18 +29,33 @@ default = ""
 description = "Implementation drain policy."
 default = "separate"
 
+# Planning scope (gc-2ua7i). Every step before the implementation drain is a
+# member of this scope: this base's `prepare-convoy` and the steps the higher
+# suffixes add. When a member closes with a failed outcome the engine skips
+# the members that have not run and closes `planning-body` with
+# gc.outcome=fail. The drains need `planning-body` and are not scope members:
+# a drain whose upstream closed failed closes itself without dispatching work,
+# and a drain that fails because a work item failed stops nothing, so
+# `prepare-review` still decides from the evidence.
+[[steps]]
+id = "planning-body"
+title = "Build planning scope"
+needs = ["prepare-convoy"]
+metadata = { "gc.kind" = "scope", "gc.scope_name" = "build-planning", "gc.scope_role" = "body" }
+description_file = "../assets/workflows/build-from-convoy-base/planning-body.md"
+
 [[steps]]
 id = "prepare-convoy"
 title = "Validate implementation convoy"
-metadata = { "gc.scope_ref" = "body", "gc.scope_role" = "member", "gc.on_fail" = "abort_scope", "gc.run_target" = "gc.run-operator" }
+metadata = { "gc.scope_ref" = "planning-body", "gc.scope_role" = "member", "gc.on_fail" = "abort_scope", "gc.run_target" = "gc.run-operator" }
 description_file = "../assets/workflows/build-from-convoy-base/prepare-convoy.md"
 
 [[steps]]
 id = "implement"
 title = "Drain continuation implementation convoy"
-needs = ["prepare-convoy"]
+needs = ["planning-body"]
 condition = "{{drain_policy}} == separate"
-metadata = { "gc.scope_ref" = "body", "gc.scope_role" = "member", "gc.run_target" = "{{implementation_target}}" }
+metadata = { "gc.run_target" = "{{implementation_target}}" }
 description_file = "../assets/workflows/build-from-convoy-base/implement.md"
 
 [steps.drain]
@@ -51,9 +66,9 @@ member_access = "exclusive"
 [[steps]]
 id = "implement-same-session"
 title = "Drain continuation convoy in one shared session"
-needs = ["prepare-convoy"]
+needs = ["planning-body"]
 condition = "{{drain_policy}} == same-session"
-metadata = { "gc.scope_ref" = "body", "gc.scope_role" = "member", "gc.run_target" = "{{implementation_target}}" }
+metadata = { "gc.run_target" = "{{implementation_target}}" }
 description_file = "../assets/workflows/build-from-convoy-base/implement-same-session.md"
 
 [steps.drain]
@@ -69,5 +84,5 @@ single_lane = true
 id = "prepare-review"
 title = "Validate review continuation inputs"
 needs = ["implement", "implement-same-session"]
-metadata = { "gc.scope_ref" = "body", "gc.scope_role" = "member", "gc.on_fail" = "abort_scope", "gc.run_target" = "gc.run-operator" }
+metadata = { "gc.scope_ref" = "review-body", "gc.scope_role" = "member", "gc.on_fail" = "abort_scope", "gc.run_target" = "gc.run-operator" }
 description_file = "../assets/workflows/build-from-convoy-base/prepare-review.md"
