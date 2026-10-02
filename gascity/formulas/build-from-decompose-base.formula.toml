@@ -66,14 +66,14 @@ default = "decomposition-base"
 [[steps]]
 id = "prepare-decompose"
 title = "Validate decompose continuation inputs"
-metadata = { "gc.scope_ref" = "body", "gc.scope_role" = "member", "gc.on_fail" = "abort_scope", "gc.run_target" = "gc.run-operator" }
+metadata = { "gc.scope_ref" = "planning-body", "gc.scope_role" = "member", "gc.on_fail" = "abort_scope", "gc.run_target" = "gc.run-operator" }
 description_file = "../assets/workflows/build-from-decompose-base/prepare-decompose.md"
 
 [[steps]]
 id = "decompose"
 title = "Create continuation implementation convoy"
 needs = ["prepare-decompose"]
-metadata = { "gc.scope_ref" = "body", "gc.scope_role" = "member", "gc.run_target" = "gc.task-decomposer", "gc.build.artifact_schema" = "gc.build.decomposition.v1", "gc.build.artifact_path_keys" = "gc.build.decomposition_path,gc.var.decomposition_path" }
+metadata = { "gc.scope_ref" = "planning-body", "gc.scope_role" = "member", "gc.run_target" = "gc.task-decomposer", "gc.build.artifact_schema" = "gc.build.decomposition.v1", "gc.build.artifact_path_keys" = "gc.build.decomposition_path,gc.var.decomposition_path" }
 description_file = "../assets/workflows/build-from-decompose-base/decompose.md"
 
 [steps.check]
@@ -88,5 +88,5 @@ timeout = "5m"
 id = "prepare-convoy"
 title = "Validate implementation convoy"
 needs = ["decompose"]
-metadata = { "gc.scope_ref" = "body", "gc.scope_role" = "member", "gc.on_fail" = "abort_scope", "gc.run_target" = "gc.run-operator" }
+metadata = { "gc.scope_ref" = "planning-body", "gc.scope_role" = "member", "gc.on_fail" = "abort_scope", "gc.run_target" = "gc.run-operator" }
 description_file = "../assets/workflows/build-from-decompose-base/prepare-convoy.md"

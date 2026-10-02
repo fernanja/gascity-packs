@@ -96,7 +96,7 @@ BUILD_BASE_STEPS = [
 ]
 
 BUILD_FROM_REVIEW_STEPS = {
-    "body",
+    "review-body",
     "prepare-review",
     "review",
     "repair-review",
@@ -105,6 +105,7 @@ BUILD_FROM_REVIEW_STEPS = {
 }
 
 BUILD_FROM_CONVOY_STEPS = BUILD_FROM_REVIEW_STEPS | {
+    "planning-body",
     "prepare-convoy",
     "implement",
     "implement-same-session",
@@ -126,16 +127,29 @@ BUILD_FROM_REQUIREMENTS_STEPS = BUILD_FROM_PLAN_STEPS | {
     "requirements",
 }
 
-# gc-2ua7i: a failed step stops a build-from-* build. Every step before
-# `finalize` is a member of the scope whose body is the `body` step;
-# `finalize` needs the body and `publish` needs `finalize`.
-BUILD_SCOPE_BODY_STEP = "body"
-BUILD_SCOPE_BODY_METADATA = {
-    "gc.kind": "scope",
-    "gc.scope_name": "build",
-    "gc.scope_role": "body",
+# gc-2ua7i: a failed planning step stops a build-from-* build before anything
+# is implemented, and a failed review gate stops it before review. The steps
+# before the implementation drain are members of the `planning-body` scope;
+# prepare-review, review and repair-review are members of `review-body`. The
+# drains need `planning-body` and belong to neither scope; `finalize` needs
+# `review-body` and `publish` needs `finalize`.
+BUILD_PLANNING_BODY = "planning-body"
+BUILD_REVIEW_BODY = "review-body"
+BUILD_SCOPE_BODIES = {
+    BUILD_PLANNING_BODY: {
+        "gc.kind": "scope",
+        "gc.scope_name": "build-planning",
+        "gc.scope_role": "body",
+    },
+    BUILD_REVIEW_BODY: {
+        "gc.kind": "scope",
+        "gc.scope_name": "build-review",
+        "gc.scope_role": "body",
+    },
 }
-BUILD_SCOPE_OUTSIDE_STEPS = {BUILD_SCOPE_BODY_STEP, "finalize", "publish"}
+BUILD_DRAIN_STEPS = {"implement", "implement-same-session"}
+BUILD_REVIEW_SCOPE_STEPS = {"prepare-review", "review", "repair-review"}
+BUILD_UNSCOPED_STEPS = BUILD_DRAIN_STEPS | {"finalize", "publish"}
 BUILD_SCOPE_KEYS = ("gc.scope_ref", "gc.scope_role", "gc.on_fail")
 BUILD_FROM_FAMILY = (
     "build-from-review-base",
@@ -149,41 +163,57 @@ BUILD_FROM_FAMILY = (
     "build-from-plan",
     "build-from-requirements",
 )
-# (formula, gate step) -> rows the rendered gate doc must carry:
-# (gc.failure_class, gc.restart.entrypoint).
+# Entrypoints that start at review: no planning steps and no drain.
+BUILD_FROM_REVIEW_ONLY = {"build-from-review-base", "build-from-review"}
+
+
+def build_step_scope(step_id: str) -> str | None:
+    """Scope body a build-from-* step must be a member of, or None."""
+    if step_id in BUILD_SCOPE_BODIES or step_id in BUILD_UNSCOPED_STEPS:
+        return None
+    if step_id in BUILD_REVIEW_SCOPE_STEPS:
+        return BUILD_REVIEW_BODY
+    return BUILD_PLANNING_BODY
+
+
+# (formula, gate step) -> (scope name in the gate doc, rows the rendered gate
+# doc must carry as (gc.failure_class, gc.restart.entrypoint)).
 BUILD_GATE_RESTART_ROWS = {
-    ("build-from-requirements", "prepare-requirements"): [
+    ("build-from-requirements", "prepare-requirements"): ("planning", [
         ("requirements_inputs_invalid", "build-from-requirements"),
-    ],
-    ("build-from-requirements", "prepare-plan"): [
+    ]),
+    ("build-from-requirements", "prepare-plan"): ("planning", [
         ("requirements_not_approved", "build-from-requirements"),
-    ],
-    ("build-from-plan", "prepare-plan"): [
+    ]),
+    ("build-from-plan", "prepare-plan"): ("planning", [
         ("requirements_not_approved", "build-from-plan"),
         ("plan_inputs_invalid", "build-from-plan"),
-    ],
-    ("build-from-plan", "prepare-decompose"): [
+    ]),
+    ("build-from-plan", "prepare-decompose"): ("planning", [
         ("plan_review_not_approved", "build-from-plan"),
         ("plan_artifacts_missing", "build-from-plan"),
-    ],
-    ("build-from-decompose", "prepare-decompose"): [
+    ]),
+    ("build-from-decompose", "prepare-decompose"): ("planning", [
         ("plan_review_not_approved", "build-from-plan"),
         ("plan_artifacts_missing", "build-from-plan"),
-    ],
-    ("build-from-plan", "prepare-convoy"): [
-        ("implementation_convoy_missing", "build-from-decompose"),
-    ],
-    ("build-from-convoy", "prepare-convoy"): [
+    ]),
+    ("build-from-plan", "prepare-convoy"): ("planning", [
         ("implementation_convoy_missing", "build-from-decompose"),
         ("implementation_convoy_invalid", "build-from-decompose"),
-    ],
-    ("build-from-plan", "prepare-review"): [
+        ("implementation_already_complete", "build-from-review"),
+    ]),
+    ("build-from-convoy", "prepare-convoy"): ("planning", [
+        ("implementation_convoy_missing", "build-from-decompose"),
+        ("implementation_convoy_invalid", "build-from-decompose"),
+        ("implementation_already_complete", "build-from-review"),
+    ]),
+    ("build-from-plan", "prepare-review"): ("review", [
         ("implementation_evidence_missing", "build-from-convoy"),
-    ],
-    ("build-from-review", "prepare-review"): [
+    ]),
+    ("build-from-review", "prepare-review"): ("review", [
         ("implementation_evidence_missing", "build-from-convoy"),
         ("implementation_evidence_missing", "build-from-review"),
-    ],
+    ]),
 }
 
 METHODOLOGY_STAGE_CONTRACTS = {
@@ -1936,13 +1966,14 @@ class FormulaAssetTests(unittest.TestCase):
         self.assertEqual(steps["decompose"]["metadata"]["gc.run_target"], "gc.task-decomposer")
         self.assertEqual(steps["decompose"]["needs"], ["prepare-decompose"])
         self.assertEqual(steps["prepare-convoy"]["needs"], ["decompose"])
-        self.assertEqual(steps["implement"]["needs"], ["prepare-convoy"])
+        self.assertEqual(steps["planning-body"]["needs"], ["prepare-convoy"])
+        self.assertEqual(steps["implement"]["needs"], ["planning-body"])
         self.assertEqual(steps["implement"]["condition"], "{{drain_policy}} == separate")
         self.assertEqual(steps["implement"]["metadata"]["gc.run_target"], "{{implementation_target}}")
         self.assertEqual(steps["implement"]["drain"]["context"], "separate")
         self.assertEqual(steps["implement"]["drain"]["formula"], "do-work")
         self.assertEqual(steps["implement"]["drain"]["member_access"], "exclusive")
-        self.assertEqual(steps["implement-same-session"]["needs"], ["prepare-convoy"])
+        self.assertEqual(steps["implement-same-session"]["needs"], ["planning-body"])
         self.assertEqual(steps["implement-same-session"]["condition"], "{{drain_policy}} == same-session")
         self.assertEqual(steps["implement-same-session"]["metadata"]["gc.run_target"], "{{implementation_target}}")
         self.assertEqual(steps["implement-same-session"]["drain"]["context"], "shared")
@@ -1953,8 +1984,8 @@ class FormulaAssetTests(unittest.TestCase):
         self.assertEqual(steps["prepare-review"]["needs"], ["implement", "implement-same-session"])
         self.assertEqual(steps["review"]["needs"], ["prepare-review"])
         self.assertEqual(steps["repair-review"]["needs"], ["review"])
-        self.assertEqual(steps["body"]["needs"], ["repair-review"])
-        self.assertEqual(steps["finalize"]["needs"], ["body"])
+        self.assertEqual(steps["review-body"]["needs"], ["repair-review"])
+        self.assertEqual(steps["finalize"]["needs"], ["review-body"])
         self.assertEqual(steps["publish"]["needs"], ["finalize"])
 
         text = effective_formula_text(root, "build-from-decompose")
@@ -2050,13 +2081,14 @@ class FormulaAssetTests(unittest.TestCase):
         self.assertEqual(steps["prepare-decompose"]["needs"], ["plan-review"])
         self.assertEqual(steps["decompose"]["needs"], ["prepare-decompose"])
         self.assertEqual(steps["prepare-convoy"]["needs"], ["decompose"])
-        self.assertEqual(steps["implement"]["needs"], ["prepare-convoy"])
-        self.assertEqual(steps["implement-same-session"]["needs"], ["prepare-convoy"])
+        self.assertEqual(steps["planning-body"]["needs"], ["prepare-convoy"])
+        self.assertEqual(steps["implement"]["needs"], ["planning-body"])
+        self.assertEqual(steps["implement-same-session"]["needs"], ["planning-body"])
         self.assertEqual(steps["prepare-review"]["needs"], ["implement", "implement-same-session"])
         self.assertEqual(steps["review"]["needs"], ["prepare-review"])
         self.assertEqual(steps["repair-review"]["needs"], ["review"])
-        self.assertEqual(steps["body"]["needs"], ["repair-review"])
-        self.assertEqual(steps["finalize"]["needs"], ["body"])
+        self.assertEqual(steps["review-body"]["needs"], ["repair-review"])
+        self.assertEqual(steps["finalize"]["needs"], ["review-body"])
         self.assertEqual(steps["publish"]["needs"], ["finalize"])
 
     def test_build_from_review_blocked_results_are_healable_not_passed(self) -> None:
@@ -2104,90 +2136,158 @@ class FormulaAssetTests(unittest.TestCase):
         # changes_required, the prepare-decompose gate closed gc.outcome=fail
         # and every later step was still dispatched (decompose,
         # prepare-convoy, the implementation drain, prepare-review, review,
-        # repair-review, finalize three times): 6 of 57 build-from-plan
-        # roots, and two of them went on to implement the rejected plan and
-        # close pass. Scope membership is what makes a failed step stop the
-        # build: the engine skips the remaining members and closes the scope
-        # body with gc.outcome=fail, and finalize, which needs only the
-        # body, runs once.
+        # repair-review, finalize three times), and two builds went on to
+        # implement the rejected plan and close pass. Scope membership is
+        # what makes a failed step stop the build: the engine skips the
+        # remaining members and closes the scope body with gc.outcome=fail.
         root = pathlib.Path(__file__).resolve().parents[1]
         for formula in BUILD_FROM_FAMILY:
             with self.subTest(formula=formula):
                 steps = {step["id"]: step for step in resolve_formula(root, formula)["steps"]}
-                body = steps[BUILD_SCOPE_BODY_STEP]
-                self.assertEqual(body["metadata"], BUILD_SCOPE_BODY_METADATA)
-                self.assertNotIn("check", body)
-                self.assertNotIn("drain", body)
+                has_planning = formula not in BUILD_FROM_REVIEW_ONLY
+                self.assertEqual(BUILD_PLANNING_BODY in steps, has_planning)
+                self.assertEqual(bool(BUILD_DRAIN_STEPS & set(steps)), has_planning)
 
-                members = {
-                    step_id: step
-                    for step_id, step in steps.items()
-                    if step_id not in BUILD_SCOPE_OUTSIDE_STEPS
-                }
-                self.assertTrue(members)
-                for step_id, step in members.items():
+                members: dict[str, set[str]] = {BUILD_PLANNING_BODY: set(), BUILD_REVIEW_BODY: set()}
+                for step_id, step in steps.items():
+                    scope = build_step_scope(step_id)
+                    metadata = step["metadata"]
                     with self.subTest(step=step_id):
-                        metadata = step["metadata"]
-                        self.assertEqual(metadata.get("gc.scope_ref"), BUILD_SCOPE_BODY_STEP)
+                        if scope is None:
+                            if step_id in BUILD_SCOPE_BODIES:
+                                self.assertEqual(metadata, BUILD_SCOPE_BODIES[step_id])
+                                self.assertNotIn("check", step)
+                                self.assertNotIn("drain", step)
+                            else:
+                                # Drains, finalize and publish cannot be
+                                # skipped by a scope and cannot stop one.
+                                for key in BUILD_SCOPE_KEYS:
+                                    self.assertNotIn(key, metadata)
+                            continue
+                        members[scope].add(step_id)
+                        self.assertEqual(metadata.get("gc.scope_ref"), scope)
                         self.assertEqual(metadata.get("gc.scope_role"), "member")
-                        if "check" in step or "drain" in step:
-                            # The engine closes ralph and drain controls and
-                            # always writes gc.outcome, so gc.outcome=fail
-                            # already aborts the scope. It also copies step
-                            # metadata onto each re-spawned attempt bead
-                            # (without gc.logical_bead_id, so the attempt is
-                            # not exempt): with abort_scope, a second attempt
-                            # closed with no gc.outcome would stop a build
-                            # whose check then passed.
-                            self.assertNotIn("gc.on_fail", metadata)
-                        else:
+                        if step_id.startswith("prepare-"):
+                            # Gates are fail-closed: a gate closed with no
+                            # gc.outcome stops the build.
+                            self.assertNotIn("check", step)
                             self.assertEqual(metadata.get("gc.on_fail"), "abort_scope")
-                        # A member never waits on a step outside the scope:
-                        # that step would still be open when the engine tries
-                        # to skip the member's successors.
-                        self.assertFalse(set(step.get("needs", [])) & BUILD_SCOPE_OUTSIDE_STEPS)
+                        else:
+                            # Every other member stops the build only with an
+                            # explicit gc.outcome=fail. For a checked step
+                            # the engine copies step metadata onto each
+                            # re-spawned attempt bead, so abort_scope would
+                            # stop a build whose second attempt was closed
+                            # with no gc.outcome and whose check then passed.
+                            # For repair-review it would fail an approved
+                            # build whose worker closed the bead bare.
+                            self.assertNotIn("gc.on_fail", metadata)
 
-                # The body needs exactly the members no other member needs,
-                # and only members: the engine cannot close a body that is
-                # still blocked by a step it does not manage.
-                needed_by_members = {
-                    need for step in members.values() for need in step.get("needs", [])
-                }
-                tails = sorted(set(members) - needed_by_members)
-                self.assertEqual(sorted(body["needs"]), tails)
-                self.assertEqual(body["needs"], ["repair-review"])
+                self.assertEqual(members[BUILD_REVIEW_BODY], BUILD_REVIEW_SCOPE_STEPS)
+                for body_id, body_members in members.items():
+                    if body_id not in steps:
+                        self.assertEqual(body_members, set())
+                        continue
+                    with self.subTest(scope=body_id):
+                        # A member waits only on members of its own scope, or
+                        # (prepare-review) on the drains. It never waits on a
+                        # scope body, finalize or publish.
+                        for step_id in body_members:
+                            allowed = body_members | (BUILD_DRAIN_STEPS if step_id == "prepare-review" else set())
+                            self.assertLessEqual(set(steps[step_id].get("needs", [])), allowed)
+                        # The body needs exactly the members no other member
+                        # needs: the engine cannot close a body that is still
+                        # blocked by a step it does not manage.
+                        needed = {need for step_id in body_members for need in steps[step_id].get("needs", [])}
+                        self.assertEqual(sorted(steps[body_id]["needs"]), sorted(body_members - needed))
 
-                # Finalize waits on the body alone, so it runs once whether
-                # the members passed or the scope was aborted, and neither it
-                # nor publish can be skipped by an abort.
-                self.assertEqual(steps["finalize"]["needs"], [BUILD_SCOPE_BODY_STEP])
+                if has_planning:
+                    self.assertEqual(steps[BUILD_PLANNING_BODY]["needs"], ["prepare-convoy"])
+                self.assertEqual(steps[BUILD_REVIEW_BODY]["needs"], ["repair-review"])
+                # Finalize waits on the review body alone, so it runs once
+                # whether the members passed or a scope was stopped.
+                self.assertEqual(steps["finalize"]["needs"], [BUILD_REVIEW_BODY])
                 self.assertEqual(steps["publish"]["needs"], ["finalize"])
-                for outside in ("finalize", "publish"):
+
+    def test_a_failed_work_item_does_not_stop_the_build(self) -> None:
+        # A drain closes gc.outcome=fail when one work item failed. In the
+        # ascent store 16 of 36 build-from-plan builds whose drain closed
+        # fail were repaired by review and closed pass (gcas-q43nx4,
+        # gcas-l5qlkp). A drain inside a scope would stop all of them before
+        # review, and a failed scope body fails the workflow root. So the
+        # drains are outside both scopes: they wait on the planning body, so
+        # a stopped planning scope makes the drain's own upstream check close
+        # it without dispatching work, and prepare-review waits on the drain
+        # itself and decides from the evidence.
+        root = pathlib.Path(__file__).resolve().parents[1]
+        for formula in BUILD_FROM_FAMILY:
+            if formula in BUILD_FROM_REVIEW_ONLY:
+                continue
+            with self.subTest(formula=formula):
+                steps = {step["id"]: step for step in resolve_formula(root, formula)["steps"]}
+                for drain_id in sorted(BUILD_DRAIN_STEPS):
+                    drain = steps[drain_id]
+                    self.assertIn("drain", drain)
+                    self.assertEqual(drain["needs"], [BUILD_PLANNING_BODY])
                     for key in BUILD_SCOPE_KEYS:
-                        self.assertNotIn(key, steps[outside]["metadata"])
+                        self.assertNotIn(key, drain["metadata"])
+                self.assertEqual(steps["prepare-review"]["needs"], sorted(BUILD_DRAIN_STEPS))
+                # No scope body waits on a drain, so a failed drain cannot
+                # fail a body and through it the workflow root.
+                for body_id in BUILD_SCOPE_BODIES:
+                    self.assertFalse(set(steps[body_id]["needs"]) & BUILD_DRAIN_STEPS)
+
+        text = rendered_step_text(root, "build-from-plan", "prepare-review")
+        for fragment in (
+            "**A drain that closed failed after running.**",
+            "when any work item failed. That alone is not a reason to\nfail this gate",
+            "pass when implementation evidence\nexists for the work that was done",
+            # After a planning stop the drain never ran: prepare-review ends
+            # the build without validating and without recording a symptom.
+            "**The planning half stopped.** Check this before validating anything",
+            "`gc.failure_reason=upstream_native_dependency_failed`: that drain never ran",
+            "do not record anything on\nthe workflow root",
+            '--reason "planning stopped; nothing to review"',
+        ):
+            with self.subTest(fragment=fragment):
+                self.assertIn(fragment, text)
+        # Launched at review there is no planning half and no drain.
+        self.assertNotIn(
+            "The planning half stopped",
+            rendered_step_text(root, "build-from-review", "prepare-review"),
+        )
 
     def test_build_from_scope_metadata_survives_every_step_override(self) -> None:
         # A child formula's step replaces the parent's whole step, metadata
         # included. Each base that re-declares a parent step (prepare-review,
         # prepare-convoy, prepare-decompose, prepare-plan) must therefore
-        # declare the scope membership itself.
+        # declare the scope membership itself. A formula in another pack that
+        # extends a build-from-* base would fall outside this check, so none
+        # may exist until it is brought under the documented contract.
         root = pathlib.Path(__file__).resolve().parents[1]
+        declared = 0
         for formula in BUILD_FROM_FAMILY:
-            data = load_formula(root, formula)
-            for step in data.get("steps", []):
-                if step["id"] in BUILD_SCOPE_OUTSIDE_STEPS:
+            for step in load_formula(root, formula).get("steps", []):
+                scope = build_step_scope(step["id"])
+                if scope is None:
                     continue
+                declared += 1
                 with self.subTest(formula=formula, step=step["id"]):
-                    self.assertEqual(step["metadata"].get("gc.scope_ref"), BUILD_SCOPE_BODY_STEP)
+                    self.assertEqual(step["metadata"].get("gc.scope_ref"), scope)
                     self.assertEqual(step["metadata"].get("gc.scope_role"), "member")
+        self.assertEqual(declared, 15)
 
-    def test_no_other_pack_formula_extends_a_build_from_base(self) -> None:
-        # The scope contract holds only when every step before finalize is a
-        # member. A formula in another pack that extends a build-from-* base
-        # and overrides or adds a step would silently fall outside it; this
-        # fails when one appears so it is brought under the contract (see
-        # "Stopping On A Failed Step" in gascity/REQUIREMENTS.md).
-        packs_root = pathlib.Path(__file__).resolve().parents[2]
+        ledger = (root / "REQUIREMENTS.md").read_text(encoding="utf-8")
+        for fragment in (
+            "### Stopping On A Failed Step",
+            "| `planning-body` | `build-from-convoy-base` |",
+            "| `review-body` | `build-from-review-base` |",
+            "A formula that extends a continuation base and overrides or adds a step must\ngive it the metadata in the tables",
+            "a scope body must only need members of its own scope",
+        ):
+            with self.subTest(fragment=fragment):
+                self.assertIn(fragment, ledger)
+        packs_root = root.parent
         offenders = []
         for path in sorted(packs_root.glob("*/formulas/*.toml")):
             if path.parent.parent.name == "gascity":
@@ -2205,12 +2305,17 @@ class FormulaAssetTests(unittest.TestCase):
         # instead of the cause (plan review not approved, restart at
         # build-from-plan).
         root = pathlib.Path(__file__).resolve().parents[1]
-        for (formula, step_id), rows in BUILD_GATE_RESTART_ROWS.items():
+        tails = {
+            "planning": "the implementation\ndrain closes without dispatching any work. `prepare-review` then ends the\nbuild without a review, and `finalize` runs once",
+            "review": "The engine skips `review` and `repair-review` and runs `finalize` once",
+        }
+        for (formula, step_id), (scope, rows) in BUILD_GATE_RESTART_ROWS.items():
             with self.subTest(formula=formula, step=step_id):
                 text = rendered_step_text(root, formula, step_id)
                 for fragment in (
                     "## Closing this gate",
-                    "member of the build scope with `gc.on_fail=abort_scope`",
+                    f"This step is a gate in the build's {scope} scope and carries\n`gc.on_fail=abort_scope`",
+                    "counts as a failure and\nstops the build",
                     '--set-metadata "gc.outcome=pass"',
                     '--set-metadata "gc.outcome=fail"',
                     "Record the stop on the workflow root first",
@@ -2219,32 +2324,43 @@ class FormulaAssetTests(unittest.TestCase):
                     '--set-metadata "gc.failure_class=<class from the table>"',
                     '--set-metadata "gc.restart.entrypoint=<entrypoint from the table>"',
                     '--set-metadata "gc.restart.reason=',
-                    "The engine skips every later build step and runs `finalize` once",
+                    tails[scope],
                 ):
                     self.assertIn(fragment, text)
                 for failure_class, entrypoint in rows:
                     self.assertIn(f"| `{failure_class}` | `{entrypoint}` |", text)
 
-    def test_every_worker_closed_build_scope_member_is_told_to_set_its_outcome(self) -> None:
-        # gc.on_fail=abort_scope is fail-closed: a member closed with no
-        # gc.outcome stops the build. Every step that carries it must tell
-        # the worker to set gc.outcome, and every prepare-* step must be a
-        # gate with the restart contract.
+        # A convoy whose work items are all closed was implemented already:
+        # decomposing again would duplicate the work.
+        for formula in ("build-from-plan", "build-from-convoy"):
+            with self.subTest(formula=formula, case="already complete"):
+                text = rendered_step_text(root, formula, "prepare-convoy")
+                self.assertIn(
+                    "| Every work item in the convoy is already closed, so nothing is left to implement "
+                    "| `implementation_already_complete` | `build-from-review` |",
+                    text,
+                )
+                self.assertIn("decomposing again would create duplicate work", text)
+
+    def test_every_build_gate_in_the_family_carries_the_close_contract(self) -> None:
+        # gc.on_fail=abort_scope is fail-closed: a gate closed with no
+        # gc.outcome stops the build. Every prepare-* step of every
+        # build-from-* formula must therefore tell the worker how to close.
         root = pathlib.Path(__file__).resolve().parents[1]
+        gates = 0
         for formula in BUILD_FROM_FAMILY:
-            steps = {step["id"]: step for step in resolve_formula(root, formula)["steps"]}
-            for step_id, step in steps.items():
-                if step["metadata"].get("gc.on_fail") != "abort_scope":
+            for step in resolve_formula(root, formula)["steps"]:
+                if not step["id"].startswith("prepare-"):
                     continue
-                with self.subTest(formula=formula, step=step_id):
-                    text = rendered_step_text(root, formula, step_id)
-                    self.assertIn("member of the build scope with `gc.on_fail=abort_scope`", text)
-                    self.assertIn("gc.outcome=pass", text)
-                    self.assertIn("gc.outcome=fail", text)
-                    self.assertIn("counts as a failure", text)
-                    if step_id.startswith("prepare-"):
-                        self.assertIn("## Closing this gate", text)
-                        self.assertIn(f"gc.build.blocked_step={step_id}", text)
+                gates += 1
+                with self.subTest(formula=formula, step=step["id"]):
+                    text = rendered_step_text(root, formula, step["id"])
+                    self.assertIn("## Closing this gate", text)
+                    self.assertIn("carries\n`gc.on_fail=abort_scope`", text)
+                    self.assertIn('--set-metadata "gc.outcome=pass"', text)
+                    self.assertIn('--set-metadata "gc.outcome=fail"', text)
+                    self.assertIn(f"gc.build.blocked_step={step['id']}", text)
+        self.assertEqual(gates, 30)
 
     def test_a_rejected_plan_restarts_at_build_from_plan(self) -> None:
         root = pathlib.Path(__file__).resolve().parents[1]
@@ -2259,6 +2375,7 @@ class FormulaAssetTests(unittest.TestCase):
                 self.assertIn("never a later entrypoint", text)
         review = rendered_step_text(root, "build-from-plan", "plan-review")
         for fragment in (
+            "Always set `gc.outcome` on this step's own claimed bead before closing it",
             "A review that reached a verdict closes with `gc.outcome=pass`",
             "`prepare-decompose`, reads it and stops the build when it is not approved",
             "gc.build.blocked_step=plan-review",
@@ -2269,26 +2386,34 @@ class FormulaAssetTests(unittest.TestCase):
                 self.assertIn(fragment, review)
 
     def test_later_steps_keep_the_restart_record_of_the_step_that_stopped_the_build(self) -> None:
+        # Both ends: every step that stops the build records it under the
+        # same keys (repair-review included), and finalize keeps any recorded
+        # gc.failure_class / gc.restart.entrypoint and derives one only when
+        # neither is there.
         root = pathlib.Path(__file__).resolve().parents[1]
         expectations = {
             "repair-review": (
                 "Read the workflow root first",
-                "`gc.build.blocked_step` names it",
+                "already carries a `gc.failure_class` or a `gc.restart.entrypoint`",
                 "Keep that `gc.failure_class`,\n`gc.restart.entrypoint`, and `gc.restart.reason` exactly as recorded",
                 "record only `gc.build.repair_status=blocked`",
-                "Otherwise record `gc.build.repair_status=blocked`",
+                "Otherwise record `gc.build.repair_status=blocked`, `gc.build.status=blocked`,\n`gc.build.blocked_step=repair-review`",
                 "gc.failure_class=review_repair_blocked",
+                "- `gc.build.status=blocked`\n- `gc.build.blocked_step=repair-review`\n- `gc.failure_class=review_changes_required`",
+                "Every stop this step records on the workflow root (report-mode `repairable`,\n`exhausted`, or `blocked`) also records `gc.build.status=blocked` and\n`gc.build.blocked_step=repair-review`",
             ),
             "finalize": (
                 "Read the workflow root before writing anything",
-                "`gc.build.blocked_step` names that step",
-                "Keep those values exactly as recorded",
+                "If it already carries a\n`gc.failure_class` or a `gc.restart.entrypoint`, a step recorded the stop",
+                "`prepare-*` gate, `plan-review`, or `repair-review`",
+                "exactly as recorded, and add `gc.build.status=blocked` when\nit is missing",
                 "Never replace them with a later symptom",
                 "the first stop is the cause",
+                "Only when the root carries neither value did no step record the stop",
                 "| plan artifact | `plan_artifact_invalid` | `build-from-plan` |",
                 "| plan review (missing or not approved) | `plan_review_not_approved` | `build-from-plan` |",
                 "| decomposition artifact or implementation convoy | `decomposition_artifact_invalid` | `build-from-decompose` |",
-                "| implementation drain or implementation evidence | `implementation_drain_failed` | `build-from-convoy` |",
+                "| implementation evidence | `implementation_evidence_missing` | `build-from-convoy` |",
                 "| review report | `review_artifact_invalid` | `build-from-review` |",
                 "| requirements artifact | `requirements_artifact_invalid` | `build-from-requirements` |",
             ),
@@ -2299,6 +2424,30 @@ class FormulaAssetTests(unittest.TestCase):
                 for fragment in fragments:
                     with self.subTest(formula=formula, step=step_id, fragment=fragment):
                         self.assertIn(fragment, text)
+
+    def test_repair_review_bare_close_does_not_fail_an_approved_build(self) -> None:
+        # repair-review is the last member of the review scope. With
+        # gc.on_fail=abort_scope a worker that closed it with no gc.outcome
+        # after an approved review failed the scope body, and through it the
+        # workflow root, while publish still ran and published. Without it, a
+        # bare close leaves the outcome to finalize and publish, which read
+        # the workflow root.
+        root = pathlib.Path(__file__).resolve().parents[1]
+        for formula in ("build-from-plan", "build-from-review"):
+            with self.subTest(formula=formula):
+                steps = {step["id"]: step for step in resolve_formula(root, formula)["steps"]}
+                metadata = steps["repair-review"]["metadata"]
+                self.assertEqual(metadata.get("gc.scope_ref"), BUILD_REVIEW_BODY)
+                self.assertNotIn("gc.on_fail", metadata)
+                text = rendered_step_text(root, formula, "repair-review")
+                for fragment in (
+                    "## Closing this step",
+                    "Always set `gc.outcome` on this step's own claimed bead before closing it",
+                    "- `gc.build.repair_status` is `not_needed` or `approved`:\n  `gc bd update \"<claimed-step-id>\" --set-metadata \"gc.outcome=pass\"`",
+                    "- Any other `gc.build.repair_status`:\n  `gc bd update \"<claimed-step-id>\" --set-metadata \"gc.outcome=fail\"`",
+                    "A bead closed with no `gc.outcome` does not fail the build by itself",
+                ):
+                    self.assertIn(fragment, text)
 
     def test_finalize_records_a_blocked_build_once(self) -> None:
         # gc-2ua7i: finalize was told to close its own bead gc.outcome=fail
@@ -2316,10 +2465,10 @@ class FormulaAssetTests(unittest.TestCase):
                     "That holds for a\n`status: blocked` report as well",
                     "Do not close this bead with `gc.outcome=fail`\nbecause the build is blocked",
                     "up to three times",
-                    "The workflow root closes `fail` from the failed build scope",
+                    "The workflow root closes `fail` from the failed scope",
                     "only when you could not write a valid final report at all",
-                    "Do not run or repair the skipped stages",
-                    "list under\n`trace.upstream` only the artifacts that exist",
+                    "Do not run or repair\nthe skipped stages",
+                    "list under `trace.upstream` only the artifacts\nthat exist",
                 ):
                     self.assertIn(fragment, text)
                 self.assertNotIn("then also close THIS step's own claimed", text)
@@ -2339,6 +2488,19 @@ class FormulaAssetTests(unittest.TestCase):
                 publish = rendered_step_text(root, formula, "publish")
                 self.assertIn("Read that state from the workflow root", publish)
                 self.assertIn("not from the finalize step's bead", publish)
+
+        # What the new instruction relies on: the check reads the report, not
+        # the bead outcome. A valid blocked report of a stopped build passes
+        # on the first attempt, and a broken one still fails.
+        valid = self._run_final_report_check(self._blocked_final_report())
+        self.assertEqual(valid.returncode, 0, valid.stdout + valid.stderr)
+        self.assertIn("build artifact valid", valid.stdout)
+        broken = self._run_final_report_check(
+            self._blocked_final_report(sections=("Summary", "Outcome", "Artifacts"))
+        )
+        self.assertNotEqual(broken.returncode, 0, broken.stdout + broken.stderr)
+        self.assertIn("failed validation", broken.stderr)
+        self.assertIn("Remaining Risks", broken.stderr)
 
     def test_repair_review_terminal_state_follows_final_verdict(self) -> None:
         # gc-jxl5x: workflow root gcas-gigyfp closed gc.outcome=fail /
@@ -6257,27 +6419,6 @@ description = "Override sink that writes the base triage report contract."
             return self._run_build_artifact_check(
                 {"finalize-attempt": attempt, "root": root_bead}, "finalize-attempt"
             )
-
-    def test_final_report_check_passes_a_valid_blocked_report_of_a_stopped_build(self) -> None:
-        # gc-2ua7i: finalize closes its own bead gc.outcome=pass once a valid
-        # blocked report is written. The check must accept that report on the
-        # first attempt, or the stopped build would still dispatch finalize
-        # three times.
-        result = self._run_final_report_check(self._blocked_final_report())
-
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("build artifact valid", result.stdout)
-
-    def test_final_report_check_still_fails_an_invalid_blocked_report(self) -> None:
-        # Closing the finalize bead gc.outcome=pass must not let a broken
-        # report through: the check reads the artifact, not the bead outcome.
-        result = self._run_final_report_check(
-            self._blocked_final_report(sections=("Summary", "Outcome", "Artifacts"))
-        )
-
-        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("failed validation", result.stderr)
-        self.assertIn("Remaining Risks", result.stderr)
 
     def test_build_artifact_check_fails_when_no_artifact_path_recorded(self) -> None:
         control = (

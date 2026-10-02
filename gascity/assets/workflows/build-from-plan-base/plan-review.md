@@ -42,9 +42,9 @@ is recorded with a concrete reason.
 
 ## Closing this step
 
-This step is a member of the build scope with `gc.on_fail=abort_scope`: always
-set `gc.outcome` on this step's own claimed bead before closing it. A bead
-closed with no `gc.outcome` counts as a failure and stops the build.
+Always set `gc.outcome` on this step's own claimed bead before closing it.
+This step is a member of the build's planning scope: closing it with
+`gc.outcome=fail` stops the build.
 
 A review that reached a verdict closes with `gc.outcome=pass`, whatever the
 verdict: `gc bd update "<claimed-step-id>" --set-metadata "gc.outcome=pass"`,

@@ -25,28 +25,34 @@ Only record a passing terminal outcome on the workflow root when all
 prerequisite artifacts exist, implementation evidence is present, review is
 approved, and repair status is `not_needed` or `approved`.
 
-**When an earlier step stopped the build.** Every build step before this one
-is a member of the build scope. When one of them closes with a failed outcome,
-the engine skips the steps after it and runs this step next. This step can
-therefore start with whole stages never run: no approved plan review, no
-decomposition, no implementation, no review. That is the expected shape of a
-stopped build. Do not run or repair the skipped stages, and do not report a
-skipped stage's missing artifact as the cause. In the final report, list under
-`trace.upstream` only the artifacts that exist, and give each requirement the
-build did not deliver the coverage status `blocked`.
+**When an earlier step stopped the build.** The build steps before this one
+sit in two scopes: planning (everything before the implementation drain) and
+review (`prepare-review`, `review`, `repair-review`). When a planning step
+closes with a failed outcome, the engine skips the rest of planning, the drain
+closes without running, `prepare-review` ends the review scope, and this step
+runs next. When `prepare-review` or `review` fails, the engine skips what is
+left of the review scope. This step can therefore start with whole stages
+never run: no approved plan review, no decomposition, no implementation, no
+review. That is the expected shape of a stopped build. Do not run or repair
+the skipped stages, and do not report a skipped stage's missing artifact as
+the cause. In the final report, list under `trace.upstream` only the artifacts
+that exist, and give each requirement the build did not deliver the coverage
+status `blocked`.
 
-Read the workflow root before writing anything. If it already carries
-`gc.build.status=blocked` with a `gc.failure_class` and a
-`gc.restart.entrypoint`, the step that stopped the build recorded them, and
-`gc.build.blocked_step` names that step. Keep those values exactly as recorded.
-Never replace them with a later symptom such as missing implementation
-evidence: the first stop is the cause, and its entrypoint is where the build
-restarts (gc-2ua7i: a build stopped by a rejected plan ended with
-`gc.restart.entrypoint=build-from-review`).
+Read the workflow root before writing anything. If it already carries a
+`gc.failure_class` or a `gc.restart.entrypoint`, a step recorded the stop: a
+`prepare-*` gate, `plan-review`, or `repair-review` (`gc.build.blocked_step`
+names it). Keep the recorded `gc.failure_class`, `gc.restart.entrypoint`, and
+`gc.restart.reason` exactly as recorded, and add `gc.build.status=blocked` when
+it is missing. Never replace them with a later symptom such as missing
+implementation evidence: the first stop is the cause, and its entrypoint is
+where the build restarts (gc-2ua7i: a build stopped by a rejected plan ended
+with `gc.restart.entrypoint=build-from-review`).
 
-If the root carries no such record, the engine closed the failed step itself:
-a checked stage ran out of attempts, or a drain failed. Record the stop here,
-from the first stage in build order that has no valid result:
+Only when the root carries neither value did no step record the stop: a
+checked stage ran out of attempts, or a step closed failed without recording.
+Record the stop here, from the first stage in build order that has no valid
+result:
 
 | First stage with no valid result | `gc.failure_class` | `gc.restart.entrypoint` |
 | --- | --- | --- |
@@ -54,7 +60,7 @@ from the first stage in build order that has no valid result:
 | plan artifact | `plan_artifact_invalid` | `build-from-plan` |
 | plan review (missing or not approved) | `plan_review_not_approved` | `build-from-plan` |
 | decomposition artifact or implementation convoy | `decomposition_artifact_invalid` | `build-from-decompose` |
-| implementation drain or implementation evidence | `implementation_drain_failed` | `build-from-convoy` |
+| implementation evidence | `implementation_evidence_missing` | `build-from-convoy` |
 | review report | `review_artifact_invalid` | `build-from-review` |
 
 **This step's own claimed bead.** The final report is this step's work
@@ -66,7 +72,7 @@ metadata is on the workflow root, close this bead with `gc.outcome=pass`:
 because the build is blocked: the artifact check counts a failed bead as a
 failed attempt without reading the report, and the engine dispatches this step
 again, up to three times, to write the same report (gc-2ua7i). The build still
-fails. The workflow root closes `fail` from the failed build scope and from the
+fails. The workflow root closes `fail` from the failed scope and from the
 publish step, which reads `gc.build.status` on the root. Close this bead with
 `gc.outcome=fail` only when you could not write a valid final report at all.
 

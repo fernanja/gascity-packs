@@ -237,14 +237,18 @@ those bases. Methodology packs that want the same entrypoints should extend the
 matching `build-from-*-base` formula and override selector defaults, routes,
 drain item formulas, or review expansions instead of copying the suffix graph.
 
-A failed step stops a `build-from-*` build. Every step before `finalize` is a
-member of one scope (`gc.scope_ref = "body"`), so when a step closes with
-`gc.outcome=fail` the remaining steps are skipped and `finalize` runs once to
-write the blocked report. The step that stopped the build records
-`gc.build.status=blocked`, `gc.failure_class`, and `gc.restart.entrypoint` on
-the workflow root; restart from that entrypoint. A pack that overrides or adds
-a step before `finalize` must keep it in the scope: see "Stopping On A Failed
-Step" in `REQUIREMENTS.md`.
+A failed planning step stops a `build-from-*` build before anything is
+implemented. The steps before the implementation drain are members of one
+scope (`planning-body`), and `prepare-review`, `review`, and `repair-review`
+are members of a second (`review-body`). When a planning step closes with
+`gc.outcome=fail`, the rest of planning is skipped, the drain closes without
+dispatching work, `prepare-review` ends the build without a review, and
+`finalize` runs once to write the blocked report. A drain that fails because a
+work item failed stops nothing: `prepare-review` decides from the evidence.
+The step that stopped the build records `gc.build.status=blocked`,
+`gc.failure_class`, and `gc.restart.entrypoint` on the workflow root; restart
+from that entrypoint. A pack that overrides or adds a step must keep it in its
+scope: see "Stopping On A Failed Step" in `REQUIREMENTS.md`.
 
 Third-party methodology packs can extend `build-base` and override only the
 stages they need. For implementation, packs should keep the Gas City drain

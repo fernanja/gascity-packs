@@ -17,10 +17,11 @@ validated and recorded.
 
 ## Closing this gate
 
-This step is a member of the build scope with `gc.on_fail=abort_scope`. Its own
-`gc.outcome` decides whether the build continues, so always set it before
-closing. A bead closed with no `gc.outcome`, or with any value other than
-`pass`, counts as a failure and stops the build.
+This step is a gate in the build's planning scope and carries
+`gc.on_fail=abort_scope`. Its own `gc.outcome` decides whether the build
+continues, so always set it before closing. A bead closed with no
+`gc.outcome`, or with any value other than `pass`, counts as a failure and
+stops the build.
 
 **Validation passed.** Run
 `gc bd update "<claimed-step-id>" --set-metadata "gc.outcome=pass"`, then
@@ -42,11 +43,19 @@ gc bd update "<workflow-root-id>" \
 | What failed | `gc.failure_class` | `gc.restart.entrypoint` |
 | --- | --- | --- |
 | No implementation convoy is recorded, or it does not exist | `implementation_convoy_missing` | `build-from-decompose` |
-| The convoy holds planning, review, workflow-control, or original-request beads, or no runnable work item | `implementation_convoy_invalid` | `build-from-decompose` |
+| The convoy holds planning, review, workflow-control, or original-request beads, or decomposition put no work item in it | `implementation_convoy_invalid` | `build-from-decompose` |
+| Every work item in the convoy is already closed, so nothing is left to implement | `implementation_already_complete` | `build-from-review` |
+
+Tell the last two rows apart by reading the convoy's members. A convoy whose
+work items are all closed was decomposed correctly and already implemented:
+decomposing again would create duplicate work, so the restart is the review
+of what exists.
 
 Then close this step as failed:
 `gc bd update "<claimed-step-id>" --set-metadata "gc.outcome=fail"`, then
 `gc bd close "<claimed-step-id>" --reason "<what failed and where to restart>"`.
-The engine skips every later build step and runs `finalize` once. Finalize
-writes the blocked report from what this step recorded, so the values above
-are what the next person restarts from.
+The engine skips the planning steps that have not run, and the implementation
+drain closes without dispatching any work. `prepare-review` then ends the
+build without a review, and `finalize` runs once. Finalize writes the blocked
+report from what this step recorded, so the values above are what the next
+person restarts from.
