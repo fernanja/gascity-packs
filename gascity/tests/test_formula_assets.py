@@ -96,6 +96,7 @@ BUILD_BASE_STEPS = [
 ]
 
 BUILD_FROM_REVIEW_STEPS = {
+    "body",
     "prepare-review",
     "review",
     "repair-review",
@@ -123,6 +124,66 @@ BUILD_FROM_PLAN_STEPS = BUILD_FROM_DECOMPOSE_STEPS | {
 BUILD_FROM_REQUIREMENTS_STEPS = BUILD_FROM_PLAN_STEPS | {
     "prepare-requirements",
     "requirements",
+}
+
+# gc-2ua7i: a failed step stops a build-from-* build. Every step before
+# `finalize` is a member of the scope whose body is the `body` step;
+# `finalize` needs the body and `publish` needs `finalize`.
+BUILD_SCOPE_BODY_STEP = "body"
+BUILD_SCOPE_BODY_METADATA = {
+    "gc.kind": "scope",
+    "gc.scope_name": "build",
+    "gc.scope_role": "body",
+}
+BUILD_SCOPE_OUTSIDE_STEPS = {BUILD_SCOPE_BODY_STEP, "finalize", "publish"}
+BUILD_SCOPE_KEYS = ("gc.scope_ref", "gc.scope_role", "gc.on_fail")
+BUILD_FROM_FAMILY = (
+    "build-from-review-base",
+    "build-from-convoy-base",
+    "build-from-decompose-base",
+    "build-from-plan-base",
+    "build-from-requirements-base",
+    "build-from-review",
+    "build-from-convoy",
+    "build-from-decompose",
+    "build-from-plan",
+    "build-from-requirements",
+)
+# (formula, gate step) -> rows the rendered gate doc must carry:
+# (gc.failure_class, gc.restart.entrypoint).
+BUILD_GATE_RESTART_ROWS = {
+    ("build-from-requirements", "prepare-requirements"): [
+        ("requirements_inputs_invalid", "build-from-requirements"),
+    ],
+    ("build-from-requirements", "prepare-plan"): [
+        ("requirements_not_approved", "build-from-requirements"),
+    ],
+    ("build-from-plan", "prepare-plan"): [
+        ("requirements_not_approved", "build-from-plan"),
+        ("plan_inputs_invalid", "build-from-plan"),
+    ],
+    ("build-from-plan", "prepare-decompose"): [
+        ("plan_review_not_approved", "build-from-plan"),
+        ("plan_artifacts_missing", "build-from-plan"),
+    ],
+    ("build-from-decompose", "prepare-decompose"): [
+        ("plan_review_not_approved", "build-from-plan"),
+        ("plan_artifacts_missing", "build-from-plan"),
+    ],
+    ("build-from-plan", "prepare-convoy"): [
+        ("implementation_convoy_missing", "build-from-decompose"),
+    ],
+    ("build-from-convoy", "prepare-convoy"): [
+        ("implementation_convoy_missing", "build-from-decompose"),
+        ("implementation_convoy_invalid", "build-from-decompose"),
+    ],
+    ("build-from-plan", "prepare-review"): [
+        ("implementation_evidence_missing", "build-from-convoy"),
+    ],
+    ("build-from-review", "prepare-review"): [
+        ("implementation_evidence_missing", "build-from-convoy"),
+        ("implementation_evidence_missing", "build-from-review"),
+    ],
 }
 
 METHODOLOGY_STAGE_CONTRACTS = {
@@ -1892,7 +1953,8 @@ class FormulaAssetTests(unittest.TestCase):
         self.assertEqual(steps["prepare-review"]["needs"], ["implement", "implement-same-session"])
         self.assertEqual(steps["review"]["needs"], ["prepare-review"])
         self.assertEqual(steps["repair-review"]["needs"], ["review"])
-        self.assertEqual(steps["finalize"]["needs"], ["repair-review"])
+        self.assertEqual(steps["body"]["needs"], ["repair-review"])
+        self.assertEqual(steps["finalize"]["needs"], ["body"])
         self.assertEqual(steps["publish"]["needs"], ["finalize"])
 
         text = effective_formula_text(root, "build-from-decompose")
@@ -1993,7 +2055,8 @@ class FormulaAssetTests(unittest.TestCase):
         self.assertEqual(steps["prepare-review"]["needs"], ["implement", "implement-same-session"])
         self.assertEqual(steps["review"]["needs"], ["prepare-review"])
         self.assertEqual(steps["repair-review"]["needs"], ["review"])
-        self.assertEqual(steps["finalize"]["needs"], ["repair-review"])
+        self.assertEqual(steps["body"]["needs"], ["repair-review"])
+        self.assertEqual(steps["finalize"]["needs"], ["body"])
         self.assertEqual(steps["publish"]["needs"], ["finalize"])
 
     def test_build_from_review_blocked_results_are_healable_not_passed(self) -> None:
@@ -2014,20 +2077,268 @@ class FormulaAssetTests(unittest.TestCase):
             "Do not close the workflow root with `gc.outcome=pass`",
             "Publishing disabled or no-op status must never convert",
             # gc-0v22om: the engine derives the whole workflow's terminal
-            # outcome from the graph SINK step's own claimed-bead outcome
-            # (publish, for this formula) -- not from the workflow root's
-            # metadata. Root-only instructions let a worker record a
+            # outcome from the graph SINK steps' outcomes (the build scope
+            # body and publish, for this formula) -- not from the workflow
+            # root's metadata. Root-only instructions let a worker record a
             # correct "blocked" root while still closing its own claimed
-            # step (finalize/repair-review/publish) with gc.outcome=pass,
-            # because "the step ran without an internal error" and "the
-            # reviewed work was approved" are different things. Confirmed
-            # against two real incidents (gcas-4iopbg, gcas-vezqmb) where
-            # exactly this happened -- see gc-0v22om.
+            # step (repair-review/publish) with gc.outcome=pass, because
+            # "the step ran without an internal error" and "the reviewed
+            # work was approved" are different things. Confirmed against two
+            # real incidents (gcas-4iopbg, gcas-vezqmb) where exactly this
+            # happened -- see gc-0v22om. Finalize is the exception
+            # (gc-2ua7i): see test_finalize_records_a_blocked_build_once.
             "close THIS step's own claimed bead",
             "with the same outcome",
         ):
             with self.subTest(fragment=fragment):
                 self.assertIn(fragment, text)
+        for step_id in ("repair-review", "publish"):
+            with self.subTest(step=step_id):
+                step_text = rendered_step_text(root, "build-from-review-base", step_id)
+                self.assertIn("close THIS step's own claimed bead", step_text.replace("\n", " "))
+                self.assertIn('--set-metadata "gc.outcome=fail"', step_text.replace("\n", " "))
+
+    def test_build_from_family_stops_on_a_failed_step(self) -> None:
+        # gc-2ua7i: a formula `needs` is satisfied when its predecessor
+        # CLOSES, whatever its outcome. When plan review returned
+        # changes_required, the prepare-decompose gate closed gc.outcome=fail
+        # and every later step was still dispatched (decompose,
+        # prepare-convoy, the implementation drain, prepare-review, review,
+        # repair-review, finalize three times): 6 of 57 build-from-plan
+        # roots, and two of them went on to implement the rejected plan and
+        # close pass. Scope membership is what makes a failed step stop the
+        # build: the engine skips the remaining members and closes the scope
+        # body with gc.outcome=fail, and finalize, which needs only the
+        # body, runs once.
+        root = pathlib.Path(__file__).resolve().parents[1]
+        for formula in BUILD_FROM_FAMILY:
+            with self.subTest(formula=formula):
+                steps = {step["id"]: step for step in resolve_formula(root, formula)["steps"]}
+                body = steps[BUILD_SCOPE_BODY_STEP]
+                self.assertEqual(body["metadata"], BUILD_SCOPE_BODY_METADATA)
+                self.assertNotIn("check", body)
+                self.assertNotIn("drain", body)
+
+                members = {
+                    step_id: step
+                    for step_id, step in steps.items()
+                    if step_id not in BUILD_SCOPE_OUTSIDE_STEPS
+                }
+                self.assertTrue(members)
+                for step_id, step in members.items():
+                    with self.subTest(step=step_id):
+                        metadata = step["metadata"]
+                        self.assertEqual(metadata.get("gc.scope_ref"), BUILD_SCOPE_BODY_STEP)
+                        self.assertEqual(metadata.get("gc.scope_role"), "member")
+                        if "check" in step or "drain" in step:
+                            # The engine closes ralph and drain controls and
+                            # always writes gc.outcome, so gc.outcome=fail
+                            # already aborts the scope. It also copies step
+                            # metadata onto each re-spawned attempt bead
+                            # (without gc.logical_bead_id, so the attempt is
+                            # not exempt): with abort_scope, a second attempt
+                            # closed with no gc.outcome would stop a build
+                            # whose check then passed.
+                            self.assertNotIn("gc.on_fail", metadata)
+                        else:
+                            self.assertEqual(metadata.get("gc.on_fail"), "abort_scope")
+                        # A member never waits on a step outside the scope:
+                        # that step would still be open when the engine tries
+                        # to skip the member's successors.
+                        self.assertFalse(set(step.get("needs", [])) & BUILD_SCOPE_OUTSIDE_STEPS)
+
+                # The body needs exactly the members no other member needs,
+                # and only members: the engine cannot close a body that is
+                # still blocked by a step it does not manage.
+                needed_by_members = {
+                    need for step in members.values() for need in step.get("needs", [])
+                }
+                tails = sorted(set(members) - needed_by_members)
+                self.assertEqual(sorted(body["needs"]), tails)
+                self.assertEqual(body["needs"], ["repair-review"])
+
+                # Finalize waits on the body alone, so it runs once whether
+                # the members passed or the scope was aborted, and neither it
+                # nor publish can be skipped by an abort.
+                self.assertEqual(steps["finalize"]["needs"], [BUILD_SCOPE_BODY_STEP])
+                self.assertEqual(steps["publish"]["needs"], ["finalize"])
+                for outside in ("finalize", "publish"):
+                    for key in BUILD_SCOPE_KEYS:
+                        self.assertNotIn(key, steps[outside]["metadata"])
+
+    def test_build_from_scope_metadata_survives_every_step_override(self) -> None:
+        # A child formula's step replaces the parent's whole step, metadata
+        # included. Each base that re-declares a parent step (prepare-review,
+        # prepare-convoy, prepare-decompose, prepare-plan) must therefore
+        # declare the scope membership itself.
+        root = pathlib.Path(__file__).resolve().parents[1]
+        for formula in BUILD_FROM_FAMILY:
+            data = load_formula(root, formula)
+            for step in data.get("steps", []):
+                if step["id"] in BUILD_SCOPE_OUTSIDE_STEPS:
+                    continue
+                with self.subTest(formula=formula, step=step["id"]):
+                    self.assertEqual(step["metadata"].get("gc.scope_ref"), BUILD_SCOPE_BODY_STEP)
+                    self.assertEqual(step["metadata"].get("gc.scope_role"), "member")
+
+    def test_no_other_pack_formula_extends_a_build_from_base(self) -> None:
+        # The scope contract holds only when every step before finalize is a
+        # member. A formula in another pack that extends a build-from-* base
+        # and overrides or adds a step would silently fall outside it; this
+        # fails when one appears so it is brought under the contract (see
+        # "Stopping On A Failed Step" in gascity/REQUIREMENTS.md).
+        packs_root = pathlib.Path(__file__).resolve().parents[2]
+        offenders = []
+        for path in sorted(packs_root.glob("*/formulas/*.toml")):
+            if path.parent.parent.name == "gascity":
+                continue
+            data = tomllib.loads(path.read_text(encoding="utf-8"))
+            for parent in data.get("extends", []):
+                if parent.startswith("build-from-"):
+                    offenders.append(f"{path.relative_to(packs_root)} extends {parent}")
+        self.assertEqual(offenders, [])
+
+    def test_build_gates_record_restart_metadata_when_they_stop_the_build(self) -> None:
+        # gc-2ua7i: the gate that stopped the build said nothing on the
+        # workflow root, so the root ended with the last symptom
+        # (missing implementation evidence, restart at build-from-review)
+        # instead of the cause (plan review not approved, restart at
+        # build-from-plan).
+        root = pathlib.Path(__file__).resolve().parents[1]
+        for (formula, step_id), rows in BUILD_GATE_RESTART_ROWS.items():
+            with self.subTest(formula=formula, step=step_id):
+                text = rendered_step_text(root, formula, step_id)
+                for fragment in (
+                    "## Closing this gate",
+                    "member of the build scope with `gc.on_fail=abort_scope`",
+                    '--set-metadata "gc.outcome=pass"',
+                    '--set-metadata "gc.outcome=fail"',
+                    "Record the stop on the workflow root first",
+                    '--set-metadata "gc.build.status=blocked"',
+                    f'--set-metadata "gc.build.blocked_step={step_id}"',
+                    '--set-metadata "gc.failure_class=<class from the table>"',
+                    '--set-metadata "gc.restart.entrypoint=<entrypoint from the table>"',
+                    '--set-metadata "gc.restart.reason=',
+                    "The engine skips every later build step and runs `finalize` once",
+                ):
+                    self.assertIn(fragment, text)
+                for failure_class, entrypoint in rows:
+                    self.assertIn(f"| `{failure_class}` | `{entrypoint}` |", text)
+
+    def test_every_worker_closed_build_scope_member_is_told_to_set_its_outcome(self) -> None:
+        # gc.on_fail=abort_scope is fail-closed: a member closed with no
+        # gc.outcome stops the build. Every step that carries it must tell
+        # the worker to set gc.outcome, and every prepare-* step must be a
+        # gate with the restart contract.
+        root = pathlib.Path(__file__).resolve().parents[1]
+        for formula in BUILD_FROM_FAMILY:
+            steps = {step["id"]: step for step in resolve_formula(root, formula)["steps"]}
+            for step_id, step in steps.items():
+                if step["metadata"].get("gc.on_fail") != "abort_scope":
+                    continue
+                with self.subTest(formula=formula, step=step_id):
+                    text = rendered_step_text(root, formula, step_id)
+                    self.assertIn("member of the build scope with `gc.on_fail=abort_scope`", text)
+                    self.assertIn("gc.outcome=pass", text)
+                    self.assertIn("gc.outcome=fail", text)
+                    self.assertIn("counts as a failure", text)
+                    if step_id.startswith("prepare-"):
+                        self.assertIn("## Closing this gate", text)
+                        self.assertIn(f"gc.build.blocked_step={step_id}", text)
+
+    def test_a_rejected_plan_restarts_at_build_from_plan(self) -> None:
+        root = pathlib.Path(__file__).resolve().parents[1]
+        for formula in ("build-from-requirements", "build-from-plan", "build-from-decompose"):
+            with self.subTest(formula=formula):
+                text = rendered_step_text(root, formula, "prepare-decompose")
+                self.assertIn(
+                    "| The plan-review verdict is `changes_required`, `blocked`, or `questions` "
+                    "| `plan_review_not_approved` | `build-from-plan` |",
+                    text,
+                )
+                self.assertIn("never a later entrypoint", text)
+        review = rendered_step_text(root, "build-from-plan", "plan-review")
+        for fragment in (
+            "A review that reached a verdict closes with `gc.outcome=pass`",
+            "`prepare-decompose`, reads it and stops the build when it is not approved",
+            "gc.build.blocked_step=plan-review",
+            "gc.failure_class=plan_review_failed",
+            "gc.restart.entrypoint=build-from-plan",
+        ):
+            with self.subTest(fragment=fragment):
+                self.assertIn(fragment, review)
+
+    def test_later_steps_keep_the_restart_record_of_the_step_that_stopped_the_build(self) -> None:
+        root = pathlib.Path(__file__).resolve().parents[1]
+        expectations = {
+            "repair-review": (
+                "Read the workflow root first",
+                "`gc.build.blocked_step` names it",
+                "Keep that `gc.failure_class`,\n`gc.restart.entrypoint`, and `gc.restart.reason` exactly as recorded",
+                "record only `gc.build.repair_status=blocked`",
+                "Otherwise record `gc.build.repair_status=blocked`",
+                "gc.failure_class=review_repair_blocked",
+            ),
+            "finalize": (
+                "Read the workflow root before writing anything",
+                "`gc.build.blocked_step` names that step",
+                "Keep those values exactly as recorded",
+                "Never replace them with a later symptom",
+                "the first stop is the cause",
+                "| plan artifact | `plan_artifact_invalid` | `build-from-plan` |",
+                "| plan review (missing or not approved) | `plan_review_not_approved` | `build-from-plan` |",
+                "| decomposition artifact or implementation convoy | `decomposition_artifact_invalid` | `build-from-decompose` |",
+                "| implementation drain or implementation evidence | `implementation_drain_failed` | `build-from-convoy` |",
+                "| review report | `review_artifact_invalid` | `build-from-review` |",
+                "| requirements artifact | `requirements_artifact_invalid` | `build-from-requirements` |",
+            ),
+        }
+        for formula in ("build-from-plan", "build-from-review"):
+            for step_id, fragments in expectations.items():
+                text = rendered_step_text(root, formula, step_id)
+                for fragment in fragments:
+                    with self.subTest(formula=formula, step=step_id, fragment=fragment):
+                        self.assertIn(fragment, text)
+
+    def test_finalize_records_a_blocked_build_once(self) -> None:
+        # gc-2ua7i: finalize was told to close its own bead gc.outcome=fail
+        # when the build was blocked. The check loop counts a failed attempt
+        # bead as a failed check without running the check script, so the
+        # engine dispatched finalize three times to write the same blocked
+        # report (root gcas-77oc4l: finalize.iteration.1..3, all fail).
+        root = pathlib.Path(__file__).resolve().parents[1]
+        for formula in ("build-from-plan", "build-from-review"):
+            with self.subTest(formula=formula):
+                steps = {step["id"]: step for step in resolve_formula(root, formula)["steps"]}
+                text = rendered_step_text(root, formula, "finalize")
+                for fragment in (
+                    "close this bead with `gc.outcome=pass`",
+                    "That holds for a\n`status: blocked` report as well",
+                    "Do not close this bead with `gc.outcome=fail`\nbecause the build is blocked",
+                    "up to three times",
+                    "The workflow root closes `fail` from the failed build scope",
+                    "only when you could not write a valid final report at all",
+                    "Do not run or repair the skipped stages",
+                    "list under\n`trace.upstream` only the artifacts that exist",
+                ):
+                    self.assertIn(fragment, text)
+                self.assertNotIn("then also close THIS step's own claimed", text)
+                self.assertNotIn("with the same outcome", text)
+                # A finalize whose report is invalid still fails: the artifact
+                # check stays on the step with its bounded attempts.
+                finalize = steps["finalize"]
+                self.assertEqual(finalize["check"]["max_attempts"], BUILD_ARTIFACT_GATE_MAX_ATTEMPTS)
+                self.assertEqual(finalize["check"]["check"]["path"], BUILD_ARTIFACT_CHECK_SCRIPT)
+                self.assertEqual(
+                    (
+                        finalize["metadata"]["gc.build.artifact_schema"],
+                        finalize["metadata"]["gc.build.artifact_path_keys"],
+                    ),
+                    FINAL_REPORT_GATE,
+                )
+                publish = rendered_step_text(root, formula, "publish")
+                self.assertIn("Read that state from the workflow root", publish)
+                self.assertIn("not from the finalize step's bead", publish)
 
     def test_repair_review_terminal_state_follows_final_verdict(self) -> None:
         # gc-jxl5x: workflow root gcas-gigyfp closed gc.outcome=fail /
@@ -5890,6 +6201,83 @@ description = "Override sink that writes the base triage report contract."
         self.assertIn("failed validation", result.stderr)
         self.assertIn("error:", result.stderr)
         self.assertIn("status", result.stderr)
+
+    @staticmethod
+    def _blocked_final_report(*, sections: tuple[str, ...] = ("Summary", "Outcome", "Artifacts", "Remaining Risks")) -> str:
+        """Final report of a build stopped at the prepare-decompose gate: only
+        the requirements and the plan exist, and nothing was delivered."""
+        body = "\n\n".join(f"## {section}\n\n{section} content." for section in sections)
+        return (
+            "---\n"
+            "schema: gc.build.final-report.v1\n"
+            "workflow:\n  id: root\n  formula: build-from-plan\n"
+            "methodology:\n  pack: gascity\n  name: build-from-plan\n"
+            "producer:\n  formula: build-from-plan\n  stage: finalize\n  attempt: 1\n"
+            "status: blocked\n"
+            "trace:\n"
+            "  upstream:\n"
+            "    - path: requirements.md\n"
+            "      hash: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+            "      ids: [AC-1]\n"
+            "    - path: implementation-plan.md\n"
+            "      hash: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"
+            "  coverage:\n"
+            "    - id: AC-1\n"
+            "      status: blocked\n"
+            "      rationale: plan review returned changes_required; the build stopped before decomposition.\n"
+            "---\n"
+            "\n"
+            f"{body}\n\n"
+            "| ID | Status |\n| --- | --- |\n| AC-1 | blocked |\n"
+        )
+
+    def _run_final_report_check(self, report: str) -> subprocess.CompletedProcess:
+        with tempfile.TemporaryDirectory() as artifact_dir:
+            artifact = pathlib.Path(artifact_dir) / "factory-run.md"
+            artifact.write_text(report, encoding="utf-8")
+            # The check runs with the finalize attempt bead as GC_BEAD_ID. It
+            # reads the artifact contract and the root pointer from that bead
+            # and never looks at the bead's own gc.outcome.
+            attempt = (
+                '[{"id": "finalize-attempt", "metadata": {'
+                '"gc.root_bead_id": "root", '
+                '"gc.outcome": "pass", '
+                '"gc.build.artifact_schema": "gc.build.final-report.v1", '
+                '"gc.build.artifact_path_keys": "gc.build.final_report_path"}}]'
+            )
+            root_bead = (
+                '[{"id": "root", "metadata": {'
+                '"gc.build.status": "blocked", '
+                '"gc.build.blocked_step": "prepare-decompose", '
+                '"gc.failure_class": "plan_review_not_approved", '
+                '"gc.restart.entrypoint": "build-from-plan", '
+                f'"gc.build.final_report_path": "{artifact}"'
+                "}}]"
+            )
+            return self._run_build_artifact_check(
+                {"finalize-attempt": attempt, "root": root_bead}, "finalize-attempt"
+            )
+
+    def test_final_report_check_passes_a_valid_blocked_report_of_a_stopped_build(self) -> None:
+        # gc-2ua7i: finalize closes its own bead gc.outcome=pass once a valid
+        # blocked report is written. The check must accept that report on the
+        # first attempt, or the stopped build would still dispatch finalize
+        # three times.
+        result = self._run_final_report_check(self._blocked_final_report())
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("build artifact valid", result.stdout)
+
+    def test_final_report_check_still_fails_an_invalid_blocked_report(self) -> None:
+        # Closing the finalize bead gc.outcome=pass must not let a broken
+        # report through: the check reads the artifact, not the bead outcome.
+        result = self._run_final_report_check(
+            self._blocked_final_report(sections=("Summary", "Outcome", "Artifacts"))
+        )
+
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("failed validation", result.stderr)
+        self.assertIn("Remaining Risks", result.stderr)
 
     def test_build_artifact_check_fails_when_no_artifact_path_recorded(self) -> None:
         control = (

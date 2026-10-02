@@ -39,3 +39,22 @@ required var from workflow root metadata — recording it only on this step bead
 leaves that var empty and fails the handoff. Close only after an approved or
 equivalent pass verdict is recorded, or after a blocked/changes-required verdict
 is recorded with a concrete reason.
+
+## Closing this step
+
+This step is a member of the build scope with `gc.on_fail=abort_scope`: always
+set `gc.outcome` on this step's own claimed bead before closing it. A bead
+closed with no `gc.outcome` counts as a failure and stops the build.
+
+A review that reached a verdict closes with `gc.outcome=pass`, whatever the
+verdict: `gc bd update "<claimed-step-id>" --set-metadata "gc.outcome=pass"`,
+then `gc bd close "<claimed-step-id>" --reason "<verdict and one-line reason>"`.
+The verdict lives in the plan-review artifact. The next step,
+`prepare-decompose`, reads it and stops the build when it is not approved.
+
+Close with `gc.outcome=fail` only when no verdict could be produced, for
+example because the plan artifact is missing or unreadable. Record the stop on
+the workflow root first: `gc.build.status=blocked`,
+`gc.build.blocked_step=plan-review`, `gc.failure_class=plan_review_failed`,
+`gc.restart.entrypoint=build-from-plan`, and `gc.restart.reason` with one
+machine-readable clause.
