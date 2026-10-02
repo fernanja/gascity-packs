@@ -23,6 +23,12 @@ THIS step's own claimed bead with the same outcome: `gc bd update
 skipped -- workflow blocked upstream>"`. Only set `gc.outcome=pass` on this
 step when finalize recorded an approved, passing continuation.
 
+Read that state from the workflow root (`gc.build.status`, `gc.outcome`,
+`gc.failure_class`), not from the finalize step's bead: finalize closes its own
+bead with `gc.outcome=pass` once a valid report is written, including a
+`status: blocked` report. When the root carries `gc.build.status=blocked`, do
+not push and do not open or mark ready a pull request.
+
 If publishing is authorized, publish only after the continuation finalized
 successfully and the review stage approved or explicitly allowed publication.
 Record push status, PR status, or a blocked publish reason on the workflow root

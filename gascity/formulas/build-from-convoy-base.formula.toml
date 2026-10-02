@@ -32,7 +32,7 @@ default = "separate"
 [[steps]]
 id = "prepare-convoy"
 title = "Validate implementation convoy"
-metadata = { "gc.run_target" = "gc.run-operator" }
+metadata = { "gc.scope_ref" = "body", "gc.scope_role" = "member", "gc.on_fail" = "abort_scope", "gc.run_target" = "gc.run-operator" }
 description_file = "../assets/workflows/build-from-convoy-base/prepare-convoy.md"
 
 [[steps]]
@@ -40,7 +40,7 @@ id = "implement"
 title = "Drain continuation implementation convoy"
 needs = ["prepare-convoy"]
 condition = "{{drain_policy}} == separate"
-metadata = { "gc.run_target" = "{{implementation_target}}" }
+metadata = { "gc.scope_ref" = "body", "gc.scope_role" = "member", "gc.run_target" = "{{implementation_target}}" }
 description_file = "../assets/workflows/build-from-convoy-base/implement.md"
 
 [steps.drain]
@@ -53,7 +53,7 @@ id = "implement-same-session"
 title = "Drain continuation convoy in one shared session"
 needs = ["prepare-convoy"]
 condition = "{{drain_policy}} == same-session"
-metadata = { "gc.run_target" = "{{implementation_target}}" }
+metadata = { "gc.scope_ref" = "body", "gc.scope_role" = "member", "gc.run_target" = "{{implementation_target}}" }
 description_file = "../assets/workflows/build-from-convoy-base/implement-same-session.md"
 
 [steps.drain]
@@ -69,5 +69,5 @@ single_lane = true
 id = "prepare-review"
 title = "Validate review continuation inputs"
 needs = ["implement", "implement-same-session"]
-metadata = { "gc.run_target" = "gc.run-operator" }
+metadata = { "gc.scope_ref" = "body", "gc.scope_role" = "member", "gc.on_fail" = "abort_scope", "gc.run_target" = "gc.run-operator" }
 description_file = "../assets/workflows/build-from-convoy-base/prepare-review.md"

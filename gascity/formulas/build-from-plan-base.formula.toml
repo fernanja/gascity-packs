@@ -36,14 +36,14 @@ default = ""
 [[steps]]
 id = "prepare-plan"
 title = "Validate plan continuation inputs"
-metadata = { "gc.run_target" = "gc.run-operator" }
+metadata = { "gc.scope_ref" = "body", "gc.scope_role" = "member", "gc.on_fail" = "abort_scope", "gc.run_target" = "gc.run-operator" }
 description_file = "../assets/workflows/build-from-plan-base/prepare-plan.md"
 
 [[steps]]
 id = "plan"
 title = "Produce implementation plan"
 needs = ["prepare-plan"]
-metadata = { "gc.run_target" = "gc.design-author", "gc.build.artifact_schema" = "gc.build.plan.v1", "gc.build.artifact_path_keys" = "gc.build.plan_path,gc.var.plan_path", "gc.build.coverage_permits" = "required" }
+metadata = { "gc.scope_ref" = "body", "gc.scope_role" = "member", "gc.run_target" = "gc.design-author", "gc.build.artifact_schema" = "gc.build.plan.v1", "gc.build.artifact_path_keys" = "gc.build.plan_path,gc.var.plan_path", "gc.build.coverage_permits" = "required" }
 description_file = "../assets/workflows/build-from-plan-base/plan.md"
 
 [steps.check]
@@ -58,12 +58,12 @@ timeout = "5m"
 id = "plan-review"
 title = "Review implementation plan"
 needs = ["plan"]
-metadata = { "gc.run_target" = "gc.review-synthesizer" }
+metadata = { "gc.scope_ref" = "body", "gc.scope_role" = "member", "gc.on_fail" = "abort_scope", "gc.run_target" = "gc.review-synthesizer" }
 description_file = "../assets/workflows/build-from-plan-base/plan-review.md"
 
 [[steps]]
 id = "prepare-decompose"
 title = "Validate decompose continuation inputs"
 needs = ["plan-review"]
-metadata = { "gc.run_target" = "gc.run-operator" }
+metadata = { "gc.scope_ref" = "body", "gc.scope_role" = "member", "gc.on_fail" = "abort_scope", "gc.run_target" = "gc.run-operator" }
 description_file = "../assets/workflows/build-from-plan-base/prepare-decompose.md"

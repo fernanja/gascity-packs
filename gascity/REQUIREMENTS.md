@@ -540,6 +540,33 @@ methodology packs may extend the suffix base that matches their entrypoint and
 override selector defaults, routes, drain formulas, or review expansions while
 preserving the downstream suffix handoff.
 
+### Stopping On A Failed Step
+
+A failed step stops the build. In every continuation base, each step before
+`finalize` is a member of one scope whose body is the `body` step declared in
+`build-from-review-base` (`gc.kind = "scope"`, `gc.scope_role = "body"`,
+`needs = ["repair-review"]`). `finalize` needs `body`, and `publish` needs
+`finalize`. Neither is a scope member.
+
+| Step shape | Step metadata | Why |
+| --- | --- | --- |
+| Worker-closed step (`prepare-*`, `plan-review`, `repair-review`) | `gc.scope_ref = "body"`, `gc.scope_role = "member"`, `gc.on_fail = "abort_scope"` | A missing or unknown `gc.outcome` counts as a failure. |
+| Checked step (`[steps.check]`) and drain step (`[steps.drain]`) | `gc.scope_ref = "body"`, `gc.scope_role = "member"` | The engine closes these and always writes `gc.outcome`. The engine also copies step metadata onto each re-spawned attempt bead, so `abort_scope` here would stop a healthy build when a second attempt is closed with no `gc.outcome`. |
+
+When a member closes with `gc.outcome=fail`, the engine closes every member
+that has not run with `gc.outcome=skipped`, closes `body` with
+`gc.outcome=fail`, and `finalize` runs once. The step that stops the build
+records `gc.build.status=blocked`, `gc.build.blocked_step`, `gc.failure_class`,
+`gc.restart.entrypoint`, and `gc.restart.reason` on the workflow root. Later
+steps keep that record. `finalize` closes its own bead with `gc.outcome=pass`
+once a valid report is written, including a `status: blocked` report.
+
+A formula that extends a continuation base and overrides or adds a step before
+`finalize` must give that step the metadata in the table. Overriding a step
+replaces the whole step, including its metadata. A step left outside the scope
+still runs after the build has stopped, and `body` must only need scope
+members. `build-base` and the formulas that extend it do not use this scope.
+
 ## Methodology Metadata Contract
 
 Top-level build formulas declare compatibility metadata in one formal metadata
