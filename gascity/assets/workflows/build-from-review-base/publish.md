@@ -58,6 +58,14 @@ right commit without checking. Follow this protocol exactly:
    workflow root before closing -- this is the sha a PR title/body may
    truthfully claim as published.
 
+Where to push from (gc-mpaqx): never the implementation worktree. It belongs
+to a closed bead and the engine may already have removed it; the approved
+commit is still in the repository. When step 4 needs a push, make your own
+detached worktree of `gc.build.review_subject_commit` at
+`$GC_CITY/.gc/worktrees/$GC_RIG-scratch/publish-<claimed-step-id>`, as
+"Where to work" in `review.md` beside this file describes, push from there so
+the pre-push hooks test that commit, and remove it before closing this step.
+
 **The pull request usually exists already, as a draft (gc-68exu).** When the
 workflow publishes, the implementation stage opens the pull request as a draft
 so CI runs before review. So before opening anything, and only after steps 1-5

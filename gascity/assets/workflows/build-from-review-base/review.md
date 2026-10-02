@@ -42,13 +42,45 @@ the commit at the pull request head. If your checkout is on a different
 commit, stop and say so in the report rather than reviewing one commit while
 CI vouches for another.
 
+Where to work (gc-mpaqx). Run every command of this review in your own
+worktree, never in the implementation worktree and never in the launcher
+checkout. The implementation worktree belongs to a work-item bead that is
+already closed, and the engine removes a closed bead's worktree under
+`$GC_CITY/.gc/worktrees/$GC_RIG/` once it is clean and no process is running
+in it, which is its state between two of your commands (two reviews lost their
+checkout mid-run). Never depend on it existing. From the launcher rig root,
+make a detached worktree of the commit under review in the scratch directory
+next to it, which that cleanup never looks at:
+
+```bash
+WT="$GC_CITY/.gc/worktrees/$GC_RIG-scratch/review-<claimed-step-id>"
+git fetch origin <branch>
+git worktree add --detach "$WT" origin/<branch>
+git -C "$WT" rev-parse HEAD
+```
+
+The last command must print the pull request head
+(`gh pr view <number> --json headRefOid --jq .headRefOid`). With no pull
+request, leave out the fetch and use the local `<branch>` instead of
+`origin/<branch>`. If `$WT` is left over from an earlier attempt, reuse it.
+When the head moves, or after a merge of the default branch, bring the
+worktree to the new head (`git -C "$WT" fetch origin <branch>`, then
+`git -C "$WT" checkout --detach origin/<branch>`) and resolve the head there
+again. A fresh worktree has no installed dependencies: when a tool or module
+is missing, install it the way the repo documents (its own install target, for
+example `make install`) and run again. A tool missing from a fresh worktree is
+not a defect in the change and is not a finding. Before closing this step,
+after the verdict and the reviewed commit are recorded, remove the worktree
+from the launcher rig root with `git worktree remove --force "$WT"`; nothing
+else cleans that directory.
+
 A requirement the implementation summary marks deferred, not run, skipped or
 "left for a later stage" is a required finding unless the requirements
 artifact permits that deferral in so many words; name the requirement and
 quote the summary (gc-gdyaz).
 
 As part of this review, actually run the rig's full local-CI-equivalent gate
-yourself in the implementation worktree (not the launcher checkout) — `make
+yourself in your own review worktree (not the launcher checkout) — `make
 preflight-fast` if the worktree's Makefile defines that target, otherwise
 `make preflight` — and record the exact command and its outcome. Do not
 accept or forward a prose claim about preflight from the implementation stage
@@ -61,7 +93,7 @@ The preflight gate is not a test run for every kind of change. Find out what it
 actually executes in this repo before treating it as coverage (in the ascent
 repo, `make preflight-fast` runs no Django tests at all). For every test module
 the diff adds or changes, and for the tests that cover each source file the
-diff changes, run them yourself in the implementation worktree with the repo's
+diff changes, run them yourself in your own review worktree with the repo's
 own test command (for example `make test ARGS='<module> <module>'`) and record
 the exact command, the tally and the exit code in the report. A test the diff
 itself adds or edits that you have not seen pass is missing evidence: the

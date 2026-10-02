@@ -129,11 +129,17 @@ path, and reviewed commit — never leave the original (pre-repair) review
 step's verdict, path, or commit in place once a repair loop has run;
 finalize and the publish step both read these directly and will trust a
 stale value over the true latest artifact. `gc.build.review_subject_commit`
-must be resolved fresh from `git rev-parse HEAD` in the worktree that the
-MOST RECENT approving re-review actually reviewed, at the moment you record
-it — never carried forward from an earlier attempt or an unrelated
-continuation (gc-ajt3i: a publish step opened a PR 3 approved commits behind
-because this value was never refreshed after a repair loop). On approval,
+must be the commit that the MOST RECENT approving re-review actually
+reviewed, resolved fresh at the moment you record it: the commit that
+re-review's report names or, if it names none, the pull request head
+(`gh pr view <number> --json headRefOid --jq .headRefOid`; with no pull
+request, `git rev-parse <branch>` at the launcher rig root). Do not look for
+it with `git rev-parse HEAD` in a worktree: the implementation worktree
+belongs to a closed bead and the re-reviewer removes its own worktree, so
+both may be gone by now (gc-mpaqx). Never carry it forward from an earlier
+attempt or an unrelated continuation (gc-ajt3i: a publish step opened a PR 3
+approved commits behind because this value was never refreshed after a repair
+loop). On approval,
 record `gc.build.repair_status=approved`, `gc.build.review_verdict=approved`,
 the final review report path, and the final reviewed commit sha as
 `gc.build.review_subject_commit`. On a genuine exhausted-without-approval ceiling,

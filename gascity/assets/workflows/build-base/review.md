@@ -6,7 +6,7 @@ post-implementation loop, not as a separate lifecycle stage. Findings must be
 actionable and tied to concrete files, commands, or artifact paths.
 
 As part of this review, actually run the rig's full local-CI-equivalent gate
-yourself in the implementation worktree (not the launcher checkout) — `make
+yourself in your own review worktree (not the launcher checkout) — `make
 preflight-fast` if the worktree's Makefile defines that target, otherwise
 `make preflight` — and record the exact command and its outcome. Do not
 accept or forward a prose claim about preflight from the implementation stage
@@ -15,6 +15,16 @@ attention-dependent, not guaranteed (one re-review caught a missing run, an
 identical re-review of a different item did not). A failing run is a required
 fix, not missing evidence — findings must state what failed and where, not
 that proof is absent.
+
+Where to work (gc-mpaqx): in your own detached worktree of the commit under
+review, never in the implementation worktree. That worktree belongs to a
+closed bead and the engine can remove it between two of your commands, so
+never depend on it existing. Make yours at
+`$GC_CITY/.gc/worktrees/$GC_RIG-scratch/review-<claimed-step-id>`, run
+everything there, re-resolve the head there, and remove it before closing
+this step. The exact commands, and what to do when a fresh worktree lacks
+installed dependencies, are under "Where to work" in this pack's
+`assets/workflows/build-from-review-base/review.md`.
 
 The requested review authority is `review_mode` {{review_mode}}. In `report`
 mode, write findings and verdicts without mutating code. In `agent` mode, also

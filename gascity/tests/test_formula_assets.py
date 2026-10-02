@@ -2556,7 +2556,7 @@ class FormulaAssetTests(unittest.TestCase):
         root = pathlib.Path(__file__).resolve().parents[1]
         preflight_instruction_core = (
             "As part of this review, actually run the rig's full local-CI-equivalent gate\n"
-            "yourself in the implementation worktree (not the launcher checkout) — `make\n"
+            "yourself in your own review worktree (not the launcher checkout) — `make\n"
             "preflight-fast` if the worktree's Makefile defines that target, otherwise\n"
             "`make preflight` — and record the exact command and its outcome. Do not\n"
             "accept or forward a prose claim about preflight from the implementation stage\n"
@@ -2568,6 +2568,128 @@ class FormulaAssetTests(unittest.TestCase):
             with self.subTest(formula=formula):
                 text = effective_formula_text(root, formula)
                 self.assertIn(preflight_instruction_core, text)
+
+    # gc-mpaqx: review runs after the work-item bead has closed, and the
+    # engine's reapClosedBeadWorktrees removes a closed bead's worktree under
+    # .gc/worktrees/<rig>/ once it is clean and no process holds it -- the
+    # state between two reviewer commands. Two reviews lost their checkout
+    # mid-run (gcas-ircgke). The reaper only considers paths under
+    # .gc/worktrees/<rig>/, so a reviewer's own worktree under
+    # .gc/worktrees/<rig>-scratch/ is out of its reach.
+    REVIEW_WORKTREE_CANONICAL_DOC = "build-from-review-base/review.md"
+    REVIEW_WORKTREE_POINTER_DOCS = {
+        "build-base/review.md": "review-<claimed-step-id>",
+        "fix-loop-base/re-review.md": "re-review-<claimed-step-id>",
+    }
+
+    def test_reviews_run_in_the_reviewers_own_worktree(self) -> None:
+        root = pathlib.Path(__file__).resolve().parents[1]
+        workflows = root / "assets" / "workflows"
+        docs = {self.REVIEW_WORKTREE_CANONICAL_DOC: "review-<claimed-step-id>", **self.REVIEW_WORKTREE_POINTER_DOCS}
+        for doc, name in docs.items():
+            text = (workflows / doc).read_text(encoding="utf-8")
+            flat = " ".join(text.split())
+            with self.subTest(doc=doc):
+                # No instruction to run anything in the implementation worktree.
+                self.assertNotIn("yourself in the implementation worktree", flat)
+                self.assertIn("yourself in your own review worktree", flat)
+                # The own-worktree rule, and where that worktree lives.
+                self.assertIn("Where to work (gc-mpaqx)", flat)
+                self.assertIn("never in the implementation worktree", flat)
+                self.assertIn("ever depend on it existing", flat)
+                self.assertIn(f"$GC_CITY/.gc/worktrees/$GC_RIG-scratch/{name}", flat)
+                # Every mention of the implementation worktree is the warning.
+                self.assertEqual(
+                    flat.count("implementation worktree"),
+                    flat.count("never in the implementation worktree")
+                    + flat.count("The implementation worktree belongs to"),
+                )
+        # The reviewer actually sees it: the rendered review steps carry it.
+        for formula in ("build-from-plan", "build-from-decompose", "build-from-convoy", "build-from-review"):
+            with self.subTest(formula=formula):
+                rendered = " ".join(rendered_step_text(root, formula, "review").split())
+                self.assertIn("never in the implementation worktree", rendered)
+        re_review = {step["id"]: step for step in load_formula(root, "fix-loop-base")["steps"]}["re-review"]
+        self.assertIn("never in the implementation worktree", " ".join(node_description(root, re_review).split()))
+        # The rules each review already had are still there.
+        for doc in (self.REVIEW_WORKTREE_CANONICAL_DOC, "fix-loop-base/re-review.md"):
+            flat = " ".join((workflows / doc).read_text(encoding="utf-8").split())
+            with self.subTest(doc=doc, kept="existing rules"):
+                self.assertIn("Review the commit at the pull request head.", flat)
+                self.assertIn("record the exact command, the tally and the exit code in the report", flat)
+                self.assertIn("After a merge of the default branch into the work branch, run them again", flat)
+
+    def test_review_worktree_commands_live_in_one_place(self) -> None:
+        root = pathlib.Path(__file__).resolve().parents[1]
+        workflows = root / "assets" / "workflows"
+        canonical = (workflows / self.REVIEW_WORKTREE_CANONICAL_DOC).read_text(encoding="utf-8")
+        for fragment in (
+            # Why: what the engine does to a closed bead's worktree.
+            "the engine removes a closed bead's worktree under\n`$GC_CITY/.gc/worktrees/$GC_RIG/`",
+            # The commands.
+            'WT="$GC_CITY/.gc/worktrees/$GC_RIG-scratch/review-<claimed-step-id>"\n'
+            "git fetch origin <branch>\n"
+            'git worktree add --detach "$WT" origin/<branch>\n'
+            'git -C "$WT" rev-parse HEAD\n',
+            "must print the pull request head\n(`gh pr view <number> --json headRefOid --jq .headRefOid`)",
+            # Re-resolving the head there when it moves.
+            '`git -C "$WT" checkout --detach origin/<branch>`) and resolve the head there\nagain',
+            # A fresh worktree without dependencies is not a finding.
+            "install it the way the repo documents (its own install target",
+            "A tool missing from a fresh worktree is\nnot a defect in the change and is not a finding.",
+            # Removed when the step closes; nothing else cleans the directory.
+            'with `git worktree remove --force "$WT"`; nothing\nelse cleans that directory',
+        ):
+            with self.subTest(fragment=fragment):
+                self.assertIn(fragment, canonical)
+        self.assertEqual(canonical.count("git worktree add"), 1)
+        for doc in (*self.REVIEW_WORKTREE_POINTER_DOCS, "build-from-review-base/publish.md"):
+            text = (workflows / doc).read_text(encoding="utf-8")
+            flat = " ".join(text.split())
+            with self.subTest(doc=doc):
+                # Pointers name the one place and do not repeat its commands.
+                self.assertIn('"Where to work" in', flat)
+                self.assertIn("review.md", flat)
+                self.assertNotIn("git worktree add", text)
+                self.assertIn("remove it before closing this step", flat)
+        for doc in self.REVIEW_WORKTREE_POINTER_DOCS:
+            flat = " ".join((workflows / doc).read_text(encoding="utf-8").split())
+            with self.subTest(doc=doc, pointer="canonical path"):
+                self.assertIn(f"`assets/workflows/{self.REVIEW_WORKTREE_CANONICAL_DOC}`", flat)
+                self.assertIn("re-resolve the head there", flat)
+
+    def test_repair_review_and_publish_do_not_depend_on_a_reaped_worktree(self) -> None:
+        root = pathlib.Path(__file__).resolve().parents[1]
+        for formula in ("build-from-plan", "build-from-review"):
+            repair = " ".join(rendered_step_text(root, formula, "repair-review").split())
+            with self.subTest(formula=formula, step="repair-review"):
+                # The approved commit is no longer read out of a worktree
+                # that a closed bead owns or that the re-reviewer removed.
+                self.assertNotIn("in the worktree that the MOST RECENT approving re-review actually reviewed", repair)
+                self.assertIn(
+                    "must be the commit that the MOST RECENT approving re-review actually reviewed, "
+                    "resolved fresh at the moment you record it",
+                    repair,
+                )
+                self.assertIn("the commit that re-review's report names", repair)
+                self.assertIn("`gh pr view <number> --json headRefOid --jq .headRefOid`", repair)
+                self.assertIn("Do not look for it with `git rev-parse HEAD` in a worktree", repair)
+                self.assertIn("both may be gone by now (gc-mpaqx)", repair)
+                self.assertIn("Never carry it forward from an earlier attempt or an unrelated continuation", repair)
+            publish = " ".join(rendered_step_text(root, formula, "publish").split())
+            with self.subTest(formula=formula, step="publish"):
+                self.assertIn("Where to push from (gc-mpaqx): never the implementation worktree.", publish)
+                self.assertIn("the approved commit is still in the repository", publish)
+                self.assertIn("$GC_CITY/.gc/worktrees/$GC_RIG-scratch/publish-<claimed-step-id>", publish)
+                self.assertIn("push from there so the pre-push hooks test that commit", publish)
+        # The re-review report is where repair-review reads the commit from.
+        re_review = (root / "assets/workflows/fix-loop-base/re-review.md").read_text(encoding="utf-8")
+        self.assertIn("Name the commit you reviewed (`git rev-parse HEAD` there) in the\nreport.", re_review)
+        # Fix workers were already kept in their own directory (38e1ab26) and
+        # never told to use the implementation worktree; that stays as it is.
+        apply_fixes = (root / "assets/workflows/fix-loop-base/apply-fixes.md").read_text(encoding="utf-8")
+        self.assertIn("Work only in your own session's working directory.", apply_fixes)
+        self.assertNotIn("implementation worktree", apply_fixes)
 
     def test_default_continuation_entrypoints_extend_suffix_bases(self) -> None:
         root = pathlib.Path(__file__).resolve().parents[1]

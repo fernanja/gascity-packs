@@ -27,11 +27,22 @@ the commit at the pull request head. If your checkout is on a different
 commit, stop and say so in the report rather than reviewing one commit while
 CI vouches for another.
 
+Where to work (gc-mpaqx): in your own detached worktree of the commit under
+review, never in the implementation worktree. That worktree belongs to a
+closed bead and the engine can remove it between two of your commands, so
+never depend on it existing. Make yours at
+`$GC_CITY/.gc/worktrees/$GC_RIG-scratch/re-review-<claimed-step-id>`, run
+everything there, re-resolve the head there, and remove it before closing
+this step. Name the commit you reviewed (`git rev-parse HEAD` there) in the
+report. The exact commands, and what to do when a fresh worktree lacks
+installed dependencies, are under "Where to work" in this pack's
+`assets/workflows/build-from-review-base/review.md`.
+
 The preflight gate is not a test run for every kind of change. Find out what it
 actually executes in this repo before treating it as coverage (in the ascent
 repo, `make preflight-fast` runs no Django tests at all). For every test module
 the diff adds or changes, and for the tests that cover each source file the
-diff changes, run them yourself in the implementation worktree with the repo's
+diff changes, run them yourself in your own review worktree with the repo's
 own test command (for example `make test ARGS='<module> <module>'`) and record
 the exact command, the tally and the exit code in the report. A test the diff
 itself adds or edits that you have not seen pass is missing evidence: the
