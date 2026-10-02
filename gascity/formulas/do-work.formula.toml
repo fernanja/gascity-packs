@@ -56,7 +56,7 @@ max_attempts = 3
 [steps.check.check]
 mode = "exec"
 path = "../assets/scripts/checks/implementation-handoff-valid.sh"
-timeout = "5m"
+timeout = "2m"
 
 [[steps]]
 id = "close-source-anchor"

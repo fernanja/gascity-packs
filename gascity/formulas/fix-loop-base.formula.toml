@@ -66,7 +66,7 @@ max_attempts = 3
 [steps.check.check]
 mode = "exec"
 path = "../assets/scripts/checks/pr-ci-green.sh"
-timeout = "5m"
+timeout = "2m"
 
 [[steps]]
 id = "re-review"

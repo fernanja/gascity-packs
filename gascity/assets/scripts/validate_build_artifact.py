@@ -135,6 +135,32 @@ PERMIT_CUE_EXAMPLES = (
 # `REQ-001: ...`. A mention in running prose is not a definition. Labels
 # without a hyphen (R1, G4, Q2) are not extracted: in the corpus the same
 # shape names design rounds ("R10 — Settings") and findings.
+#
+# Only some defined ids are FORCED, that is, must have a coverage entry even
+# when the artifact does not list them: those whose prefix states an
+# obligation (acceptance criteria, scope items, requirements). An open
+# question, an out-of-scope note or a user story carries a label too, and
+# forcing an entry for it left `covered` as its only passing status.
+# GC_BUILD_FORCED_ID_PREFIXES (comma-separated) replaces the list. An id
+# defined under a heading that says the section is not a list of obligations
+# (out of scope, non-goals, open questions, background, verified) is never
+# forced. Ids the artifact lists under trace.upstream[].ids need an entry in
+# any case (validate_coverage_completeness).
+DEFAULT_FORCED_ID_PREFIXES = ("AC", "SCOPE", "REQ")
+FORCED_ID_PREFIXES_ENV = "GC_BUILD_FORCED_ID_PREFIXES"
+UNFORCED_HEADING_RE = re.compile(
+    r"out[- ]of[- ]scope|not in scope|non[- ]?goals?|open questions?|background|verified", re.IGNORECASE
+)
+HEADING_RE = re.compile(r"^[ \t]*(#{1,6})[ \t]+(.*?)[ \t]*#*[ \t]*$")
+LIST_ITEM_RE = re.compile(r"^[ \t]*(?:[-*+]|\d{1,3}[.)])[ \t]+")
+
+# A conditional requirement ("If only the test is wrong: ...") whose condition
+# does not hold is `not_applicable`. Nothing hands it off, so no hand-off cue
+# can permit it; its permit is its own conditional clause, and the entry's
+# rationale says why the condition is false. This is the one case where a
+# requirement's own statement is its permit.
+CONDITIONAL_CLAUSE_RE = re.compile(r"\b(?:if|unless|when|whenever|in case|provided that|as long as)\b")
+MIN_CONDITION_RATIONALE_CHARS = 20
 REQUIREMENT_ID_DEFINITION_RE = re.compile(
     r"^[ \t]*(?:>[ \t]*)*"
     r"(?:(?P<list>(?:[-*+]|\d{1,3}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?)|(?P<head>#{1,6}[ \t]+))?"
@@ -474,27 +500,107 @@ def permit_cue(folded_quote: str) -> str:
     return ""
 
 
-def extract_requirement_ids(text: str) -> list[str]:
-    """Requirement ids defined in a requirements artifact, in first-seen order."""
-    ids: list[str] = []
+@dataclass(frozen=True)
+class RequirementDefinition:
+    id: str
+    forced: bool  # must have a coverage entry
+    block: str  # the definition's own text: its list item, paragraph or heading
+
+
+def forced_id_prefixes() -> tuple[str, ...]:
+    raw = os.environ.get(FORCED_ID_PREFIXES_ENV)
+    if raw is None:
+        return DEFAULT_FORCED_ID_PREFIXES
+    return tuple(part.strip().upper() for part in raw.split(",") if part.strip())
+
+
+def _indent(line: str) -> int:
+    return len(line) - len(line.lstrip(" \t"))
+
+
+def _defines_requirement_id(line: str) -> str:
+    match = REQUIREMENT_ID_DEFINITION_RE.match(line)
+    if not match or REQUIREMENT_ID_NOT_A_LABEL_RE.match(match.group("after")):
+        return ""
+    after = match.group("after")
+    if match.group("head") or match.group("open"):
+        defined = True
+    elif match.group("list"):
+        defined = bool(REQUIREMENT_ID_PLAIN_LABEL_END_RE.match(after))
+    else:
+        defined = bool(REQUIREMENT_ID_PARAGRAPH_LABEL_END_RE.match(after))
+    return match.group("id") if defined else ""
+
+
+def requirement_definitions(text: str) -> list[RequirementDefinition]:
+    """Every place a requirements artifact defines an id, in document order."""
+    prefixes = forced_id_prefixes()
+    lines = text.splitlines()
+    definitions: list[RequirementDefinition] = []
+    headings: list[tuple[int, str]] = []  # the headings the current line is under
     in_fence = False
-    for line in text.splitlines():
+    for index, line in enumerate(lines):
         if FENCE_RE.match(line):
             in_fence = not in_fence
             continue
         if in_fence:
             continue
-        match = REQUIREMENT_ID_DEFINITION_RE.match(line)
-        if match and not REQUIREMENT_ID_NOT_A_LABEL_RE.match(match.group("after")):
-            after = match.group("after")
-            if match.group("head") or match.group("open"):
-                defined = True
-            elif match.group("list"):
-                defined = bool(REQUIREMENT_ID_PLAIN_LABEL_END_RE.match(after))
-            else:
-                defined = bool(REQUIREMENT_ID_PARAGRAPH_LABEL_END_RE.match(after))
-            if defined and match.group("id") not in ids:
-                ids.append(match.group("id"))
+        item_id = _defines_requirement_id(line)
+        if item_id:
+            under_unforced_heading = any(UNFORCED_HEADING_RE.search(title) for _, title in headings)
+            forced = item_id.rsplit("-", 1)[0] in prefixes and not under_unforced_heading
+            definitions.append(RequirementDefinition(item_id, forced, _definition_block(lines, index)))
+        heading = HEADING_RE.match(line)
+        if heading:
+            level = len(heading.group(1))
+            while headings and headings[-1][0] >= level:
+                headings.pop()
+            headings.append((level, heading.group(2)))
+    return definitions
+
+
+def _definition_block(lines: list[str], start: int) -> str:
+    """The definition line and the lines that continue it: up to the next id
+    definition, heading, sibling list item, or paragraph break."""
+    first = lines[start]
+    if HEADING_RE.match(first):
+        return first
+    indent = _indent(first)
+    block = [first]
+    index = start + 1
+    while index < len(lines):
+        line = lines[index]
+        if not line.strip():
+            following = next((later for later in lines[index + 1 :] if later.strip()), "")
+            # A blank line ends the block unless the item continues, indented, after it.
+            if not following or _indent(following) <= indent or HEADING_RE.match(following):
+                break
+            index += 1
+            continue
+        if HEADING_RE.match(line) or FENCE_RE.match(line) or _defines_requirement_id(line):
+            break
+        if LIST_ITEM_RE.match(line) and _indent(line) <= indent:
+            break
+        block.append(line)
+        index += 1
+    return "\n".join(block)
+
+
+def extract_requirement_ids(text: str) -> list[str]:
+    """Requirement ids defined in a requirements artifact, in first-seen order."""
+    ids: list[str] = []
+    for definition in requirement_definitions(text):
+        if definition.id not in ids:
+            ids.append(definition.id)
+    return ids
+
+
+def forced_requirement_ids(text: str) -> list[str]:
+    """The defined ids that must have a coverage entry, in first-seen order."""
+    ids: list[str] = []
+    for definition in requirement_definitions(text):
+        if definition.forced and definition.id not in ids:
+            ids.append(definition.id)
     return ids
 
 
@@ -539,14 +645,15 @@ def missing_requirement_ids_problem(coverage: list[dict[str, Any]], requirements
     coverage_ids = {str(entry["id"]) for entry in coverage}
     missing_by_source: list[str] = []
     for label, text in requirements_sources:
-        missing = [item for item in extract_requirement_ids(text) if not coverage_accounts_for(item, coverage_ids)]
+        missing = [item for item in forced_requirement_ids(text) if not coverage_accounts_for(item, coverage_ids)]
         if missing:
             missing_by_source.append(f"{label}: {', '.join(missing)}")
     if not missing_by_source:
         return ""
     return (
-        "requirement ids: coverage must account for every requirement id the requirements artifact defines, whether or not this "
-        "artifact lists it under trace.upstream[].ids. Add a trace.coverage entry and a coverage-table row for each id missing from "
+        "requirement ids: coverage must account for every requirement id the requirements artifact defines "
+        f"(labels starting {', '.join(forced_id_prefixes())}), whether or not this artifact lists it under trace.upstream[].ids. "
+        "Add a trace.coverage entry and a coverage-table row for each id missing from "
         + "; ".join(missing_by_source)
     )
 
@@ -573,6 +680,7 @@ def coverage_permits_problem(
 
     labels = [label for label, _ in requirements_sources]
     haystacks = [normalize_permit_text(text) for _, text in requirements_sources]
+    definitions = [definition for _, text in requirements_sources for definition in requirement_definitions(text)]
     problems: list[str] = []
     for entry in open_entries:
         item_id = str(entry["id"])
@@ -600,12 +708,28 @@ def coverage_permits_problem(
                 f"{where}: permit text is not in the requirements artifact ({', '.join(labels)}): \"{shown}\". Quote the requirements word for word"
             )
             continue
-        if not permit_cue(needle):
-            problems.append(
-                f"{where}: the permit quotes the requirements, but the quoted text does not hand the requirement off: \"{shown}\". "
-                f"A requirement's own statement is not a permit. Quote the words that say it is for later, for someone else, or not for this work (for example {PERMIT_CUE_EXAMPLES}); "
-                "if the requirements do not say that, the requirement is yours to deliver"
-            )
+        if permit_cue(needle):
+            continue
+        own_clause = any(
+            needle in normalize_permit_text(definition.block)
+            for definition in definitions
+            if coverage_accounts_for(definition.id, {item_id})
+        )
+        if entry_status == "not_applicable" and own_clause and CONDITIONAL_CLAUSE_RE.search(needle):
+            rationale = normalize_permit_text(str(entry.get("rationale") or ""))
+            if len(rationale) < MIN_CONDITION_RATIONALE_CHARS or rationale == needle:
+                problems.append(
+                    f"{where}: the permit quotes the requirement's own condition, which is allowed for a conditional requirement that "
+                    f"does not apply, but `rationale` must then state why the condition is false (at least {MIN_CONDITION_RATIONALE_CHARS} characters, in your own words)"
+                )
+            continue
+        problems.append(
+            f"{where}: the permit quotes the requirements, but the quoted text does not hand the requirement off: \"{shown}\". "
+            f"A requirement's own statement is not a permit. Quote the words that say it is for later, for someone else, or not for this work (for example {PERMIT_CUE_EXAMPLES}); "
+            "if the requirements do not say that, the requirement is yours to deliver. The one exception: a conditional requirement "
+            "(\"If ...\", \"When ...\", \"Unless ...\") whose condition does not hold takes `status: not_applicable`, a permit quoting "
+            "its own conditional clause, and a `rationale` saying why the condition is false"
+        )
     if not problems:
         return ""
     return (

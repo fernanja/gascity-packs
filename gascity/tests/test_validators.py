@@ -759,7 +759,7 @@ class CoveragePermitTests(unittest.TestCase):
             )
 
     def test_missing_ids_and_missing_permits_are_reported_together(self) -> None:
-        requirements = self.REQUIREMENTS + "\n- **AC-4:** the summary lists the unshipped commits.\n"
+        requirements = self.REQUIREMENTS + "\n## More criteria\n\n- **AC-4:** the summary lists the unshipped commits.\n"
         with self.assertRaises(build_artifact_validator.ValidationError) as caught:
             self.validate(self.artifact(ac3_status="deferred"), requirements=requirements)
         message = str(caught.exception)
@@ -782,6 +782,146 @@ class CoveragePermitTests(unittest.TestCase):
         other = text.replace("AC-3-alerts-auto-close", "AC-30")
         with self.assertRaisesRegex(build_artifact_validator.ValidationError, "missing from requirements.md: AC-3"):
             self.validate(other)
+
+    FORCED_REQUIREMENTS = (
+        "# Requirements\n\n"
+        "## Verified (mayor, 2026-10-01)\n\n"
+        "- **AC-90.** A label inside the mayor's verification notes.\n\n"
+        "## Scope\n\n"
+        "- **SCOPE-1.** Find the cause.\n"
+        "- **REQ-2 (new):** fix it.\n\n"
+        "## Acceptance criteria\n\n"
+        "- **AC-1.** The cause is stated.\n"
+        "- **AC-2.** The fix has a test.\n"
+        "- **AC-3.** Preflight is clean.\n"
+        "- **US-1** \u2014 as a user I want quiet chrome.\n"
+        "- **TS-1** \u2014 refactor the badge.\n"
+        "- **CON-1:** make commands only.\n\n"
+        "### AC-4 \u2014 a criterion written as a heading\n\n"
+        "## Open questions\n\n"
+        "- **OQ-1 (mechanism)** \u2014 which mechanism?\n"
+        "- **REQ-91:** a label inside an open question.\n\n"
+        "## OQ-5 decided (mayor, 2026-09-29): option A\n\n"
+        "Summary tiles drop cents.\n\n"
+        "## Out of scope\n\n"
+        "OOS-1. No writes to the design project.\n"
+        "- **SCOPE-92.** Deleting the kept databases.\n\n"
+        "### Deeper under out of scope\n\n"
+        "- **AC-93.** Still under the out-of-scope heading.\n\n"
+        "## Non-Goals\n\n"
+        "- **AC-94:** not a goal.\n\n"
+        "## Background\n\n"
+        "- **REQ-95:** history.\n\n"
+        "## Constraints\n\n"
+        "- **AC-5.** A normal heading again, so this one counts.\n"
+    )
+
+    def test_only_obligation_prefixes_under_ordinary_headings_are_forced(self) -> None:
+        # Open questions, out-of-scope notes, user stories and constraints
+        # carry labels too. Forcing an entry for them left `covered` as their
+        # only passing status (r14-part2: a summary rejected over the heading
+        # `## OQ-5 decided`).
+        self.assertEqual(
+            build_artifact_validator.forced_requirement_ids(self.FORCED_REQUIREMENTS),
+            ["SCOPE-1", "REQ-2", "AC-1", "AC-2", "AC-3", "AC-4", "AC-5"],
+        )
+        defined = build_artifact_validator.extract_requirement_ids(self.FORCED_REQUIREMENTS)
+        for unforced in ("OQ-1", "OQ-5", "OOS-1", "US-1", "TS-1", "CON-1", "AC-90", "REQ-91", "SCOPE-92", "AC-93", "AC-94", "REQ-95"):
+            self.assertIn(unforced, defined)
+
+    def test_forced_prefixes_can_be_replaced_through_the_environment(self) -> None:
+        with mock.patch.dict(os.environ, {"GC_BUILD_FORCED_ID_PREFIXES": "ac, oq"}):
+            self.assertEqual(
+                build_artifact_validator.forced_requirement_ids(self.FORCED_REQUIREMENTS),
+                ["AC-1", "AC-2", "AC-3", "AC-4", "AC-5"],  # OQ-1 and OQ-5 sit under open-question headings
+            )
+        with mock.patch.dict(os.environ, {"GC_BUILD_FORCED_ID_PREFIXES": "US"}):
+            self.assertEqual(build_artifact_validator.forced_requirement_ids(self.FORCED_REQUIREMENTS), ["US-1"])
+        with mock.patch.dict(os.environ, {"GC_BUILD_FORCED_ID_PREFIXES": ""}):
+            self.assertEqual(build_artifact_validator.forced_requirement_ids(self.FORCED_REQUIREMENTS), [])
+
+    def test_an_artifact_is_not_rejected_for_unforced_labels_and_is_for_forced_ones(self) -> None:
+        requirements = (
+            "# Requirements\n\n## Acceptance criteria\n\n"
+            "- **AC-1:** one.\n- **AC-2:** two.\n- **AC-3:** three.\n\n"
+            "## Open questions\n\n- **OQ-1** \u2014 which mechanism?\n\n"
+            "## OQ-5 decided (mayor): option A\n\n"
+            "## Out of scope\n\nOOS-1. No design-project writes.\n- **AC-9.** Not this build.\n"
+        )
+        self.validate(self.artifact(ac3_status="covered"), requirements=requirements)
+        with self.assertRaisesRegex(build_artifact_validator.ValidationError, r"missing from requirements.md: AC-4$"):
+            self.validate(self.artifact(ac3_status="covered"), requirements=requirements.replace("## Open questions", "- **AC-4:** four.\n\n## Open questions"))
+
+    CONDITIONAL_REQUIREMENTS = (
+        "# Requirements\n\n## Scope\n\n"
+        "- **AC-1.** Find the cause before changing anything.\n"
+        "- **AC-2. If a real user can lose an edit:** fix the component so the save always sends the\n"
+        "  latest committed value. Add a test that fails on `main` for that reason.\n"
+        "- **AC-3. If only the test is wrong:** fix the test's mechanism so it waits on the thing\n"
+        "  that proves the state, not on timer advancement racing a state commit. No retries.\n"
+    )
+    CONDITION_FALSE = "AC-2 applies: a real user loses the edit (probe R2 is red on main), so the test is not the only thing wrong."
+
+    def conditional(self, permit: str | None, rationale: str | None, status: str = "not_applicable", schema: str = "gc.build.plan.v1") -> str:
+        text = self.artifact(schema, ac3_status=status, permit=permit)
+        old = "      rationale: Checked by the mayor after merge.\n"
+        self.assertIn(old, text)
+        return text.replace(old, f"      rationale: {json.dumps(rationale)}\n" if rationale is not None else "")
+
+    def test_a_conditional_requirement_that_does_not_apply_is_permitted_by_its_own_condition(self) -> None:
+        # gcas-2sjc32: SCOPE-3 ("If only the test is wrong: ...") does not
+        # apply because SCOPE-2 does. Nothing hands it off, so no hand-off
+        # sentence exists to quote; `covered` was the only status that passed.
+        for schema in self.SECTIONS:
+            for permit in (
+                "If only the test is wrong: fix the test's mechanism",
+                "AC-3. If only the test is wrong:",
+                "**AC-3. If only the test is wrong:** fix the test's mechanism so it waits on the thing that proves the state",
+            ):
+                with self.subTest(schema=schema, permit=permit):
+                    self.validate(
+                        self.conditional(permit, self.CONDITION_FALSE, schema=schema),
+                        schema,
+                        requirements=self.CONDITIONAL_REQUIREMENTS,
+                    )
+
+    def test_a_conditional_permit_needs_a_rationale_that_says_why_the_condition_is_false(self) -> None:
+        permit = "If only the test is wrong: fix the test's mechanism"
+        for rationale in ("n/a", "Does not apply.", permit):
+            with self.subTest(rationale=rationale):
+                with self.assertRaises(build_artifact_validator.ValidationError) as caught:
+                    self.validate(self.conditional(permit, rationale), requirements=self.CONDITIONAL_REQUIREMENTS)
+                message = str(caught.exception)
+                self.assertIn("trace.coverage[AC-3] (status 'not_applicable')", message)
+                self.assertIn("`rationale` must then state why the condition is false", message)
+        # With no rationale at all the entry is malformed before any permit is read.
+        with self.assertRaisesRegex(build_artifact_validator.ValidationError, r"rationale must be a non-empty string"):
+            self.validate(self.conditional(permit, None), requirements=self.CONDITIONAL_REQUIREMENTS)
+
+    def test_the_conditional_permit_is_only_for_not_applicable_and_only_the_requirement_s_own_condition(self) -> None:
+        cases = {
+            # The requirement's own statement, with no condition in the quote.
+            "no condition quoted": ("not_applicable", "fix the test's mechanism so it waits on the thing that proves the state"),
+            # Another requirement's condition.
+            "another requirement's condition": ("not_applicable", "If a real user can lose an edit: fix the component"),
+            # A conditional requirement is not deferred or put out of scope by its own words.
+            "deferred": ("deferred", "If only the test is wrong: fix the test's mechanism"),
+            "out of scope": ("out_of_scope", "If only the test is wrong: fix the test's mechanism"),
+            # An unconditional requirement cannot be declared not applicable by quoting itself.
+        }
+        for name, (status, permit) in cases.items():
+            with self.subTest(name):
+                with self.assertRaises(build_artifact_validator.ValidationError) as caught:
+                    self.validate(self.conditional(permit, self.CONDITION_FALSE, status=status), requirements=self.CONDITIONAL_REQUIREMENTS)
+                message = str(caught.exception)
+                self.assertIn("does not hand the requirement off", message)
+                self.assertIn("takes `status: not_applicable`, a permit quoting its own conditional clause", message)
+        unconditional = self.CONDITIONAL_REQUIREMENTS.replace("AC-3. If only the test is wrong:", "AC-3. The test is fixed:")
+        with self.assertRaisesRegex(build_artifact_validator.ValidationError, "does not hand the requirement off"):
+            self.validate(
+                self.conditional("The test is fixed: fix the test's mechanism", self.CONDITION_FALSE),
+                requirements=unconditional,
+            )
 
     def test_requirement_ids_are_extracted_where_the_corpus_defines_them(self) -> None:
         text = (

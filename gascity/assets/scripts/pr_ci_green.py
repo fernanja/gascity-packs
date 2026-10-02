@@ -13,21 +13,30 @@ Run by checks/pr-ci-green.sh. Two ways in:
 
 What green means, for the commit at the pull request head:
 
-- Every check run and commit status is complete, no workflow run for the
-  commit is still queued or in progress, and every status check the base
-  branch requires has reported. A job behind `needs:` has no check run until
-  it is queued, so "every check that exists is complete" alone can be true
-  while CI is still running.
+- A check is a (workflow, job name) pair for a GitHub Actions job, and an
+  (app, name) pair for anything else. One commit can carry several check runs
+  with one name, from different workflows or from repeated runs of one
+  workflow; of the runs of one pair, the latest started is the result.
+- Every check is complete, the latest run of every workflow for the commit has
+  finished, and every status check the base branch requires has reported. A
+  job behind `needs:` has no check run until it is queued, so "every check
+  that exists is complete" alone can be true while CI is still running.
 - Each check concluded success, skipped or neutral. Anything else is red,
   including a cancelled or timed-out job: this script does not classify
   flakes.
-- One exception, because a worker cannot fix the base branch from its own
-  branch: a red check passes, with a WARNING naming both runs, when it is NOT
-  one of the base branch's required status checks AND the base branch's own
-  most recent completed result for the same check name is also red. A red
-  check that the base branch requires, that is green on the base branch, or
-  that the base branch has never run, blocks. If the base branch's
+- Two kinds of red check do not block, because a worker cannot fix them from
+  its branch. Both are printed as a WARNING and recorded:
+  * a GitHub Actions job the base branch does not require, when the base
+    branch's own most recent completed result for the same workflow and job
+    is red too AND every step that failed here failed there (the job's steps
+    are read for both). The same job name failing at another step is the
+    branch's own break and blocks, naming the step;
+  * a check from another app, or a commit status (a deployment preview, a
+    coverage bot), that the base branch does not require.
+  A red check that the base branch requires blocks. If the base branch's
   protection cannot be read, every check is treated as required.
+- A pull request that conflicts with its base gets no pull_request workflow
+  runs. When checks are missing for that reason the failure says so.
 - In gate mode the pull request must still be a draft. A ready, green,
   unreviewed pull request can be merged by a merge sweep before review; only
   the publish step marks it ready.
@@ -37,16 +46,17 @@ and this confirms the result in a few API calls, because the controller that
 runs step checks processes one control bead at a time.
 
 Exit 0: green, or an explicit `skipped: <reason>` (no publishing intent, no
-GitHub remote, gh missing or not signed in, repository without CI). A skip in
-a workflow that intends to publish is also written to stderr.
+GitHub remote, gh missing, repository without CI). Every skip is written to
+stderr as well as stdout.
 Exit 1: red, pending, no pull request, not a draft, head mismatch. Detail goes
 to stderr, which the dispatcher records in gc.attempt_log for the next attempt.
-No verdict (GitHub 5xx, rate limit, network, `gc bd show` failing): retried
-with backoff. The dispatcher counts every exit code as a failed attempt and
-only a check that is still running at its timeout as "could not run"
-(gascity internal/dispatch/ralph.go, GateTimeout), so under the controller the
-script keeps retrying until that timeout ends it, having already said why on
-stderr. Run by hand it gives up after a short budget and exits 75.
+No verdict (GitHub 5xx, rate limit, network, `gc bd show` failing, and, when
+the workflow intends to publish, a gh that cannot authenticate): retried with
+backoff. The dispatcher counts every exit code as a failed attempt and only a
+check that is still running at its timeout as "could not run" (gascity
+internal/dispatch/ralph.go, GateTimeout), so under the controller the script
+retries until that timeout ends it, having already said why on stderr. Run by
+hand it gives up after 45 seconds and exits 75.
 
 In gate mode the result line is also recorded, best effort, on the workflow
 root as gc.build.ci_gate_result.
@@ -101,13 +111,18 @@ STARTED = time.monotonic()
 # running the gate by hand does not have it.
 UNDER_CONTROLLER = bool(os.environ.get("GC_ITERATION", "").strip())
 # How long to keep retrying an infrastructure error, measured from script
-# start. Under the controller this must outlast the check timeout the formulas
-# declare ("5m"), so that the dispatcher sees a timeout, which consumes no
-# attempt, and not an exit code, which does.
-CONTROLLER_CHECK_TIMEOUT_SECONDS = 300
+# start. Under the controller there is no limit: the dispatcher sees a check
+# that is still running at its timeout as "could not run", which consumes no
+# attempt, and any exit code as a failed attempt. The script cannot know the
+# timeout of the check it runs in (2m, 5m, 20m), so it retries until the
+# controller ends it. Run by hand it gives up after 45 seconds.
+HAND_RUN_INFRA_BUDGET_SECONDS = 45.0
 INFRA_BUDGET_SECONDS = _env_float(
-    "PR_CI_GREEN_INFRA_BUDGET_SECONDS", CONTROLLER_CHECK_TIMEOUT_SECONDS + 30 if UNDER_CONTROLLER else 45
+    "PR_CI_GREEN_INFRA_BUDGET_SECONDS", float("inf") if UNDER_CONTROLLER else HAND_RUN_INFRA_BUDGET_SECONDS
 )
+# When a wrapper script is what the controller ended, this process is left
+# behind with no parent. It must not retry for ever.
+STARTED_PARENT = os.getppid()
 RETRY_FIRST_SLEEP_SECONDS = _env_float("PR_CI_GREEN_RETRY_SLEEP_SECONDS", 2.0)
 RETRY_MAX_SLEEP_SECONDS = 30.0
 # How many base-branch commits behind its head to look for the base branch's
@@ -123,6 +138,8 @@ GITHUB_REMOTE_RE = re.compile(
     r"(?P<owner>[^/\s]+)/(?P<repo>[^/\s]+?)(?:\.git)?/?$"
 )
 SHA_RE = re.compile(r"^[0-9a-fA-F]{7,64}$")
+ACTIONS_APP = "github-actions"
+ACTIONS_JOB_URL_RE = re.compile(r"/actions/runs/(\d+)/job/(\d+)")
 RATE_LIMIT_RE = re.compile(r"rate limit|secondary rate|abuse detection|HTTP 429", re.IGNORECASE)
 BEAD_MISSING_RE = re.compile(r"no issues? found", re.IGNORECASE)
 
@@ -148,11 +165,7 @@ class NoVerdict(Exception):
 
 
 class Skip(Exception):
-    """The gate does not apply; the reason is recorded and the step passes."""
-
-    def __init__(self, reason: str, *, loud: bool = False) -> None:
-        super().__init__(reason)
-        self.loud = loud
+    """The gate does not apply; the reason is said on both streams, recorded, and the step passes."""
 
 
 def say(message: str) -> None:
@@ -179,13 +192,19 @@ def retry_infra(what: str, call: Callable[[], Any]) -> Any:
         remaining = INFRA_BUDGET_SECONDS - (time.monotonic() - STARTED)
         if remaining <= 0:
             raise NoVerdict(f"{what} kept failing: {last}")
+        if STARTED_PARENT != 1 and os.getppid() == 1:
+            raise NoVerdict(f"{what} kept failing and the process that started this check is gone: {last}")
         if not announced:
             # Said now, not at the end: under the controller the check timeout
             # ends this process before it could say anything later.
+            how_long = (
+                "until the check times out; the controller then runs the check again without counting a failed attempt"
+                if INFRA_BUDGET_SECONDS == float("inf")
+                else f"for up to {INFRA_BUDGET_SECONDS:g}s"
+            )
             warn(
                 f"INFRA {what} failed: {last}. This says nothing about the commit, so there is no verdict yet; "
-                "retrying with backoff. If it is still failing when the check times out, the controller runs the "
-                "check again without counting a failed attempt"
+                f"retrying with backoff {how_long}"
             )
             announced = True
         time.sleep(max(0.0, min(delay, remaining)))
@@ -300,7 +319,11 @@ def redact_url(url: str) -> str:
 
 
 class GitHub:
-    def __init__(self) -> None:
+    def __init__(self, *, must_answer: bool = False) -> None:
+        """must_answer: the workflow intends to publish, so GitHub's answer is
+        needed. A gh that cannot authenticate is then an infrastructure error
+        (no verdict), not a reason to pass the step unchecked."""
+        self.must_answer = must_answer
         self.binary = shutil.which("gh") or next((p for p in GH_FALLBACK_PATHS if os.access(p, os.X_OK)), "")
         if not self.binary:
             raise Skip("gh is not installed")
@@ -319,7 +342,14 @@ class GitHub:
                 self.env["HOME"] = real_home
                 self.env.pop("XDG_CONFIG_HOME", None)
             if not self._signed_in():
-                raise Skip("gh is not signed in to github.com")
+                if not must_answer:
+                    raise Skip("gh is not signed in to github.com")
+
+                def signed_in() -> None:
+                    if not self._signed_in():
+                        raise Transient("gh is not signed in to github.com (gh auth token returned nothing)")
+
+                retry_infra("gh sign-in", signed_in)
 
     def _signed_in(self) -> bool:
         try:
@@ -346,7 +376,9 @@ class GitHub:
             if "HTTP 404" in everything or "HTTP 422" in everything:
                 raise NotOnGitHub(f"GitHub does not have {path}: {detail}")
             if "HTTP 401" in everything:
-                raise Skip(f"GitHub rejected gh's credentials (HTTP 401) reading {path}", loud=True)
+                if self.must_answer:
+                    raise Transient(f"GitHub rejected gh's credentials: {detail}")
+                raise Skip(f"GitHub rejected gh's credentials (HTTP 401) reading {path}")
             if "HTTP 403" in everything:
                 raise Refused(f"GitHub refused {path}: {detail}. The result is unknown, so the gate does not pass")
             # 5xx, a network error, a gh crash: nothing was learned.
@@ -413,22 +445,76 @@ def find_pull(
     return pulls[0]
 
 
-def collect_checks(gh: GitHub, repo: str, sha: str, *, no_push_advice: bool = False) -> list[dict[str, str]]:
-    """Every check run and commit status on sha, as {name, state, detail, url}.
+def run_started(run: dict[str, Any]) -> str:
+    return str(run.get("run_started_at") or run.get("created_at") or "")
 
-    state is one of ok, skipped, failed, pending.
+
+def workflow_runs(gh: GitHub, repo: str, sha: str) -> list[dict[str, Any]]:
+    """Every GitHub Actions workflow run for sha (the listing needs the full sha)."""
+    runs: list[dict[str, Any]] = []
+    for page in range(1, 4):
+        suffix = f"&page={page}" if page > 1 else ""
+        try:
+            data = gh.api(f"repos/{repo}/actions/runs?head_sha={sha}&per_page=100{suffix}")
+        except NotOnGitHub:
+            return runs  # Actions is not enabled for this repository
+        items = data.get("workflow_runs") if isinstance(data, dict) else None
+        items = [item for item in items if isinstance(item, dict)] if isinstance(items, list) else []
+        runs.extend(items)
+        if len(items) < 100:
+            break
+    return runs
+
+
+def unfinished_workflow_runs(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The latest run of each workflow, when it is queued, waiting or in progress."""
+    latest: dict[str, dict[str, Any]] = {}
+    for item in runs:
+        workflow = str(item.get("name") or item.get("workflow_id") or "(unnamed workflow)")
+        if workflow not in latest or run_started(item) > run_started(latest[workflow]):
+            latest[workflow] = item
+    out: list[dict[str, Any]] = []
+    for workflow, item in latest.items():
+        status = str(item.get("status") or "")
+        if status == "completed":
+            continue
+        out.append(
+            {
+                "name": f"workflow run: {workflow}",
+                "state": "pending",
+                "detail": status or "not started",
+                "url": str(item.get("html_url") or ""),
+            }
+        )
+    return out
+
+
+def collect_checks(
+    gh: GitHub, repo: str, sha: str, runs: list[dict[str, Any]], *, no_push_advice: bool = False
+) -> list[dict[str, Any]]:
+    """The check runs and commit statuses that count on sha.
+
+    Each is {name, state, detail, url, kind, workflow, key, job_id, started};
+    state is one of ok, skipped, failed, pending. kind is "actions" for a
+    GitHub Actions job and "external" for another app's check run or a commit
+    status (Vercel, a coverage bot). key is (workflow, job name) for an
+    Actions job: `filter=latest` still returns one run per workflow run, so
+    one commit can carry several same-named runs, from different workflows
+    (six `changes` jobs) or from repeated runs of one workflow. When a key has
+    several runs, the latest started one is the result.
     """
-    checks: list[dict[str, str]] = []
+    workflow_of_run = {str(run.get("id")): str(run.get("name") or "") for run in runs}
+    found: list[dict[str, Any]] = []
     for page in range(1, 11):
         try:
             data = gh.api(f"repos/{repo}/commits/{sha}/check-runs?filter=latest&per_page=100&page={page}")
         except NotOnGitHub:
             advice = "" if no_push_advice else ": push it before handing it to review"
             raise GateFailure(f"commit {sha[:12]} is not on GitHub in {repo}{advice}") from None
-        runs = data.get("check_runs") if isinstance(data, dict) else None
-        if not isinstance(runs, list):
+        items = data.get("check_runs") if isinstance(data, dict) else None
+        if not isinstance(items, list):
             raise GateFailure(f"GitHub returned no check_runs list for {sha}")
-        for item in runs:
+        for item in items:
             if not isinstance(item, dict):
                 continue
             status = str(item.get("status") or "")
@@ -439,16 +525,37 @@ def collect_checks(gh: GitHub, repo: str, sha: str, *, no_push_advice: bool = Fa
                 state, detail = ("skipped" if conclusion == "skipped" else "ok"), conclusion
             else:
                 state, detail = "failed", conclusion or "no conclusion"
-            checks.append(
+            name = str(item.get("name") or "(unnamed check)")
+            url = str(item.get("html_url") or item.get("details_url") or "")
+            app = str((item.get("app") or {}).get("slug") or "")
+            job = ACTIONS_JOB_URL_RE.search(url)
+            if app == ACTIONS_APP or (not app and job):
+                run_id = job.group(1) if job else ""
+                workflow = workflow_of_run.get(run_id, "")
+                kind, key = "actions", (workflow or f"workflow run {run_id}", name)
+                job_id = str(item.get("id") or (job.group(2) if job else ""))
+            else:
+                kind, workflow, key, job_id = "external", "", (f"app {app or 'unknown'}", name), ""
+            found.append(
                 {
-                    "name": str(item.get("name") or "(unnamed check)"),
+                    "name": name,
                     "state": state,
                     "detail": detail,
-                    "url": str(item.get("html_url") or item.get("details_url") or ""),
+                    "url": url,
+                    "kind": kind,
+                    "workflow": workflow,
+                    "key": key,
+                    "job_id": job_id,
+                    "started": str(item.get("started_at") or ""),
                 }
             )
-        if len(runs) < 100:
+        if len(items) < 100:
             break
+    checks: dict[tuple[str, str], dict[str, Any]] = {}
+    for check in found:
+        current = checks.get(check["key"])
+        if current is None or check["started"] > current["started"]:
+            checks[check["key"]] = check
     combined = gh.api(f"repos/{repo}/commits/{sha}/status?per_page=100")
     statuses = combined.get("statuses") if isinstance(combined, dict) else None
     for item in statuses if isinstance(statuses, list) else []:
@@ -456,40 +563,42 @@ def collect_checks(gh: GitHub, repo: str, sha: str, *, no_push_advice: bool = Fa
             continue
         raw = str(item.get("state") or "")
         state = {"success": "ok", "pending": "pending"}.get(raw, "failed")
-        checks.append(
+        name = str(item.get("context") or "(unnamed status)")
+        checks.setdefault(
+            ("commit status", name),
             {
-                "name": str(item.get("context") or "(unnamed status)"),
+                "name": name,
                 "state": state,
                 "detail": raw or "no state",
                 "url": str(item.get("target_url") or ""),
-            }
+                "kind": "external",
+                "workflow": "",
+                "key": ("commit status", name),
+                "job_id": "",
+                "started": "",
+            },
         )
-    return checks
+    return list(checks.values())
 
 
-def unfinished_workflow_runs(gh: GitHub, repo: str, sha: str) -> list[dict[str, str]]:
-    """Workflow runs for sha that are queued, waiting or in progress."""
+def failed_steps(gh: GitHub, repo: str, check: dict[str, Any]) -> tuple[str, list[str]] | None:
+    """(workflow name, names of the steps that did not succeed) of an Actions job, or None if it cannot be read."""
+    if not check.get("job_id"):
+        return None
     try:
-        data = gh.api(f"repos/{repo}/actions/runs?head_sha={sha}&per_page=100")
-    except NotOnGitHub:
-        return []  # Actions is not enabled for this repository
-    runs = data.get("workflow_runs") if isinstance(data, dict) else None
-    out: list[dict[str, str]] = []
-    for item in runs if isinstance(runs, list) else []:
-        if not isinstance(item, dict):
-            continue
-        status = str(item.get("status") or "")
-        if status == "completed":
-            continue
-        out.append(
-            {
-                "name": f"workflow run: {item.get('name') or '(unnamed workflow)'}",
-                "state": "pending",
-                "detail": status or "not started",
-                "url": str(item.get("html_url") or ""),
-            }
-        )
-    return out
+        job = gh.api(f"repos/{repo}/actions/jobs/{check['job_id']}")
+    except (NotOnGitHub, Refused):
+        return None
+    if not isinstance(job, dict):
+        return None
+    steps = [
+        str(step.get("name") or f"step {step.get('number')}")
+        for step in job.get("steps") or []
+        if isinstance(step, dict)
+        and step.get("status") == "completed"
+        and str(step.get("conclusion") or "") not in GREEN_CONCLUSIONS
+    ]
+    return str(job.get("workflow_name") or ""), steps
 
 
 class BaseBranch:
@@ -501,7 +610,7 @@ class BaseBranch:
         # None: protection could not be read, so every check counts as required.
         self.required: set[str] | None = None
         self.why_unknown = ""
-        self._history: list[tuple[str, list[dict[str, str]]]] = []
+        self._history: list[tuple[str, list[dict[str, Any]]]] = []
         self._older: list[str] | None = None
         if ref:
             self._read_policy()
@@ -550,13 +659,13 @@ class BaseBranch:
     def is_required(self, name: str) -> bool:
         return self.required is None or name in self.required
 
-    def last_result(self, name: str) -> dict[str, str] | None:
-        """The base branch's most recent completed result for a check name.
+    def last_result(self, key: tuple[str, str]) -> dict[str, Any] | None:
+        """The base branch's most recent completed result for a (workflow, job) key.
 
-        Looks at the base head first, then, when the check did not run there
-        or has not finished, at up to BASE_LOOKBACK_COMMITS commits behind it.
-        Returns {state, detail, url, sha}, or None when the base branch has
-        no completed result for that name in the commits looked at.
+        Looks at the base head first, then, when the job did not run there or
+        has not finished, at up to BASE_LOOKBACK_COMMITS commits behind it.
+        Returns the check with its commit as "sha", or None when the base
+        branch has no completed result for that key in the commits looked at.
         """
         if not self.sha:
             return None
@@ -571,14 +680,12 @@ class BaseBranch:
                     if index - 1 >= len(self._older):
                         return None
                     sha = self._older[index - 1]
-                self._history.append((sha, collect_checks(self.gh, self.repo, sha, no_push_advice=True)))
+                runs = workflow_runs(self.gh, self.repo, sha)
+                self._history.append((sha, collect_checks(self.gh, self.repo, sha, runs, no_push_advice=True)))
             sha, checks = self._history[index]
-            named = [check for check in checks if check["name"] == name and check["state"] != "pending"]
-            if named:
-                # One red run among same-named runs is red, as it is on the
-                # pull request side.
-                worst = next((check for check in named if check["state"] == "failed"), named[0])
-                return {**worst, "sha": sha}
+            for check in checks:
+                if check["key"] == key and check["state"] != "pending":
+                    return {**check, "sha": sha}
             index += 1
 
     def _older_commits(self) -> list[str]:
@@ -594,15 +701,70 @@ class BaseBranch:
         return [sha for sha in shas if sha and sha != self.sha][:BASE_LOOKBACK_COMMITS]
 
 
-def evaluate(gh: GitHub, repo: str, sha: str, label: str, *, base_ref: str, may_push: bool = True, notes: list[str] | None = None) -> str:
+def quoted(names: list[str]) -> str:
+    return ", ".join(f"'{name}'" for name in names)
+
+
+def same_failure_on_base(
+    gh: GitHub, repo: str, check: dict[str, Any], base: BaseBranch
+) -> tuple[str, dict[str, Any] | None, list[str], list[str]]:
+    """Is this red Actions job red on the base branch for the same reason?
+
+    Returns (why it blocks, or "" when it does not; the base result; this
+    job's failed steps; the base job's failed steps). The base branch has the
+    same failure only when its latest result for the same workflow and job is
+    red and every step that failed here failed there too. A job name alone is
+    not enough: one job runs lint, tests and a smoke suite, and a branch that
+    breaks the smoke suite is not excused by a base branch that fails lint.
+    """
+    ref = base.ref
+    theirs = base.last_result(check["key"])
+    if theirs is None:
+        return f"{ref}: no result", None, [], []
+    if theirs["state"] != "failed":
+        return f"{ref}: green at {theirs['sha'][:12]}", theirs, [], []
+    mine_job, their_job = failed_steps(gh, repo, check), failed_steps(gh, repo, theirs)
+    if mine_job is None or their_job is None:
+        return f"{ref} is red at {theirs['sha'][:12]} too, but the job's steps could not be read to compare", theirs, [], []
+    (my_workflow, my_steps), (their_workflow, their_steps) = mine_job, their_job
+    if my_workflow != their_workflow:
+        return f"{ref}: red job of that name at {theirs['sha'][:12]} is in another workflow ('{their_workflow}')", theirs, my_steps, their_steps
+    if not my_steps:
+        return f"no failed step to compare with {ref}", theirs, my_steps, their_steps
+    extra = [step for step in my_steps if step not in their_steps]
+    if extra:
+        return (
+            f"fails at step {quoted(extra)}; {ref} at {theirs['sha'][:12]} fails at {quoted(their_steps) or 'no step'}",
+            theirs,
+            my_steps,
+            their_steps,
+        )
+    return "", theirs, my_steps, their_steps
+
+
+def evaluate(
+    gh: GitHub,
+    repo: str,
+    sha: str,
+    label: str,
+    *,
+    base_ref: str,
+    may_push: bool = True,
+    notes: list[str] | None = None,
+    pull: dict[str, Any] | None = None,
+) -> str:
     """Return the PASS line, or raise. Warnings printed on the way are appended to notes."""
     notes = notes if notes is not None else []
-    checks = collect_checks(gh, repo, sha, no_push_advice=not may_push)
-    running = unfinished_workflow_runs(gh, repo, sha)
+    runs = workflow_runs(gh, repo, sha)
+    checks = collect_checks(gh, repo, sha, runs, no_push_advice=not may_push)
+    running = unfinished_workflow_runs(runs)
+    conflict = conflict_note(gh, repo, pull, base_ref, may_push)
     if not checks and not running:
         workflows = gh.api(f"repos/{repo}/actions/workflows?per_page=1")
         if isinstance(workflows, dict) and workflows.get("total_count") == 0:
             raise Skip(f"{repo} has no workflows and no check has reported on {sha[:12]} ({label})")
+        if conflict:
+            raise GateFailure(f"{label} head {sha[:12]}: no check has reported. {conflict}")
         raise GateFailure(
             f"no check has reported on {sha[:12]} ({label}) yet. CI has not started or has not registered: "
             "wait for the checks to appear and finish, then close the step again"
@@ -613,29 +775,35 @@ def evaluate(gh: GitHub, repo: str, sha: str, label: str, *, base_ref: str, may_
     missing = sorted(base.required - names) if base.required else []
     pending = [check for check in checks if check["state"] == "pending"] + running
 
-    blocking: list[tuple[dict[str, str], str]] = []
-    tolerated: list[tuple[dict[str, str], dict[str, str]]] = []
+    blocking: list[tuple[dict[str, Any], str]] = []
+    warnings: list[str] = []
+    excused: list[str] = []
     for check in (check for check in checks if check["state"] == "failed"):
+        described = f"'{check['name']}' ({check['detail']}) {check['url']}".rstrip()
         if base.required is None:
             blocking.append((check, "counted as required"))
-            continue
-        if base.is_required(check["name"]):
+        elif base.is_required(check["name"]):
             blocking.append((check, f"required by {base_ref}"))
-            continue
-        theirs = base.last_result(check["name"])
-        if theirs is None:
-            blocking.append((check, f"{base_ref}: no result"))
-        elif theirs["state"] == "failed":
-            tolerated.append((check, theirs))
+        elif check["kind"] == "external":
+            # Another app's verdict (a deployment preview, a coverage bot) that
+            # the base branch does not require is not CI for this change.
+            excused.append(check["name"])
+            warnings.append(
+                f"WARNING {label}: {described} is red. It is not a GitHub Actions check and {base_ref} does not "
+                "require it, so it does not block; report it"
+            )
         else:
-            blocking.append((check, f"{base_ref}: green at {theirs['sha'][:12]}"))
-
-    warnings = [
-        f"WARNING {label}: check '{check['name']}' is red on this commit ({check['detail']}) {check['url']} "
-        f"and also red on {base_ref} at {theirs['sha'][:12]} ({theirs['detail']}) {theirs['url']}. "
-        f"It is not a required check of {base_ref}, so it does not block; report it, do not fix {base_ref}'s failure on this branch"
-        for check, theirs in tolerated
-    ]
+            why, theirs, my_steps, their_steps = same_failure_on_base(gh, repo, check, base)
+            if why:
+                blocking.append((check, why))
+                continue
+            assert theirs is not None
+            excused.append(check["name"])
+            warnings.append(
+                f"WARNING {label}: check {described} is red at step {quoted(my_steps)} and {base_ref} at {theirs['sha'][:12]} "
+                f"is red at step {quoted(their_steps)} too: {theirs['url']}. It is not a required check of {base_ref}, "
+                f"so it does not block; report it, do not fix {base_ref}'s failure on this branch"
+            )
 
     if blocking or pending or missing:
         lines = [
@@ -655,17 +823,21 @@ def evaluate(gh: GitHub, repo: str, sha: str, label: str, *, base_ref: str, may_
             shown += 1
         if len(listed) > shown:
             lines.append(f"  ... and {len(listed) - shown} more")
-        for check, theirs in tolerated[:3]:
-            lines.append(f"  (not blocking: {check['name']} is also red on {base_ref} at {theirs['sha'][:12]})")
+        if excused:
+            lines.append(f"  (red but not blocking: {', '.join(excused[:5])})")
         if base.required is None and blocking:
             lines.append(f"Every check counts as required here because {base.why_unknown}.")
         elif any(why.endswith("no result") for _, why in blocking):
             lines.append(
-                f"'{base_ref}: no result' means {base_ref} has no completed run of that check on its head"
+                f"'{base_ref}: no result' means {base_ref} has no completed run of that workflow's job on its head"
                 + (f" or the {BASE_LOOKBACK_COMMITS} commits before it" if BASE_LOOKBACK_COMMITS else "")
                 + ", so the failure cannot be put down to it."
             )
-        if blocking and may_push:
+        if conflict and (missing or not blocking):
+            # A conflicted pull request gets no pull_request workflow runs, so
+            # waiting for the missing checks would never end.
+            lines.append(conflict)
+        elif blocking and may_push:
             lines.append(
                 "Read each failed job's log, fix what this branch broke, push, and wait for the new run. "
                 "A job that died in CI's own machinery is still a failed check (one rerun is allowed). If it cannot be made green here, close the step with "
@@ -680,15 +852,41 @@ def evaluate(gh: GitHub, repo: str, sha: str, label: str, *, base_ref: str, may_
             lines.append("Wait for the unfinished checks and workflow runs to complete, then close the step again.")
         raise GateFailure("\n".join(lines))
 
+    if conflict:
+        warnings.append(f"WARNING {label}: the checks are green but {conflict[0].lower()}{conflict[1:]}")
     for line in warnings:
         say(line)
     skipped = sum(1 for check in checks if check["state"] == "skipped")
-    counts = f"passed {len(checks) - skipped - len(tolerated)}, skipped {skipped}"
-    if tolerated:
-        names_listed = ", ".join(check["name"] for check, _ in tolerated)
-        counts += f", red but also red on {base_ref} {len(tolerated)}: {names_listed}"
+    counts = f"passed {len(checks) - skipped - len(excused)}, skipped {skipped}"
+    if excused:
+        counts += f", red but not blocking {len(excused)}: {', '.join(excused)}"
     notes.extend(warnings)
     return f"PASS {label} head={sha} checks={len(checks)} ({counts})"
+
+
+def conflict_note(gh: GitHub, repo: str, pull: dict[str, Any] | None, base_ref: str, may_push: bool) -> str:
+    """Say so when an open pull request cannot be merged because of conflicts."""
+    if not pull or pull.get("state") != "open":
+        return ""
+    if "mergeable" not in pull:
+        # The pull request listings leave mergeability out; the single read has it.
+        try:
+            detail = gh.api(f"repos/{repo}/pulls/{pull.get('number')}")
+        except (NotOnGitHub, Refused):
+            return ""
+        pull = detail if isinstance(detail, dict) else pull
+    if pull.get("mergeable") is not False and pull.get("mergeable_state") != "dirty":
+        return ""
+    remedy = (
+        f"Merge {base_ref} into the work branch, resolve the conflicts, push, and wait for the new run."
+        if may_push
+        else "This workflow was not launched to publish, so this step cannot resolve them: close the step with "
+        "gc.outcome=fail and gc.failure_class=hard and say so."
+    )
+    return (
+        f"The pull request has merge conflicts with {base_ref}, and GitHub does not run pull_request workflows on a "
+        f"conflicted pull request, so waiting will not help. {remedy}"
+    )
 
 
 # --------------------------------------------------------------------------
@@ -743,13 +941,12 @@ def gate_mode(bead_id: str, state: dict[str, Any]) -> str:
     if not intent and not commit and not branch:
         raise Skip(f"no publishing intent ({intent_note}) and no handoff recorded on {root_id}")
 
+    state["intent"] = intent
     try:
         repo = resolve_repo([worktree, os.environ.get("GC_WORK_DIR", ""), os.environ.get("GC_STORE_PATH", ""), os.getcwd()])
-        gh = GitHub()
+        gh = GitHub(must_answer=intent)
     except Skip as skip:
-        # With publishing intent this is a gate that should have run and did
-        # not: say so where a failure would have been said.
-        raise Skip(f"{skip} ({intent_note})", loud=intent) from None
+        raise Skip(f"{skip} ({intent_note})") from None
 
     if intent and not commit:
         raise GateFailure(
@@ -760,7 +957,7 @@ def gate_mode(bead_id: str, state: dict[str, Any]) -> str:
     try:
         pull = find_pull(gh, repo, branch=branch, commit=commit)
     except Skip as skip:
-        raise Skip(f"{skip} ({intent_note})", loud=intent or skip.loud) from None
+        raise Skip(f"{skip} ({intent_note})") from None
     if pull is None:
         where = " or ".join(part for part in (f"branch {branch}" if branch else "", f"commit {commit[:12]}" if commit else "") if part)
         if not intent:
@@ -778,13 +975,9 @@ def gate_mode(bead_id: str, state: dict[str, Any]) -> str:
         # nothing about this one.
         raise Skip(
             f"{intent_note}: handoff commit {commit[:12]} is local only; open pull request {repo}#{pull.get('number')} "
-            f"is at {head[:12]}, so GitHub has no checks for the commit handed to review",
-            loud=True,
+            f"is at {head[:12]}, so GitHub has no checks for the commit handed to review"
         )
-    try:
-        return check_pull(gh, repo, pull, commit, require_draft=True, may_push=may_push, notes=state.setdefault("notes", []))
-    except Skip as skip:
-        raise Skip(str(skip), loud=intent or skip.loud) from None
+    return check_pull(gh, repo, pull, commit, require_draft=True, may_push=may_push, notes=state.setdefault("notes", []))
 
 
 def nothing_to_publish(gh: GitHub, repo: str, commit: str) -> bool:
@@ -829,7 +1022,7 @@ def check_pull(
             f"Review must see the commit CI ran on: {remedy}"
         )
     base_ref = str((pull.get("base") or {}).get("ref") or "")
-    result = evaluate(gh, repo, head, label, base_ref=base_ref, may_push=may_push, notes=notes)
+    result = evaluate(gh, repo, head, label, base_ref=base_ref, may_push=may_push, notes=notes, pull=pull)
     state = "draft" if pull.get("draft") else str(pull.get("state") or "")
     return f"{result} pr_state={state} url={pull.get('html_url', '')}"
 
@@ -905,8 +1098,12 @@ def main(argv: list[str] | None = None) -> int:
             record_result(state.get("root_id", ""), " | ".join([result, *state.get("notes", [])]))
     except Skip as skip:
         say(f"skipped: {skip}")
-        if skip.loud:
+        # Every skip is also said where a failure would be: a gate that did
+        # not run must not look like a gate that passed.
+        if state.get("intent"):
             warn(f"WARNING the CI gate did not run and the step passes unchecked: {skip}")
+        else:
+            warn(f"skipped: {skip}")
         record_result(state.get("root_id", ""), f"skipped: {skip}")
         return 0
     except NoVerdict as failure:

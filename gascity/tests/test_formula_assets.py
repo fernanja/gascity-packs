@@ -233,16 +233,20 @@ MANUAL_BUILD_ARTIFACT_CHECK_COMMAND = (
     '"$(gc formula list --json | python3 -c \'import json,os,sys; c=[os.path.join(os.path.dirname(p),"assets/scripts/checks/build-artifact-valid.sh") for p in json.load(sys.stdin)["search_paths"]]; print([p for p in c if os.path.isfile(p)][-1])\')"'
 )
 
+CI_GATE_CHECK_TIMEOUT = "2m"
+
 # Per-gate overrides of (script, timeout) for gates whose formula wires a
 # stricter check than the shared BUILD_ARTIFACT_CHECK_SCRIPT / "5m" default.
 BUILD_ARTIFACT_GATE_CHECK_OVERRIDES = {
     ("review", "write-report"): ("../assets/scripts/checks/preflight-evidence-valid.sh", "20m"),
     # The steps that end implementation chain the artifact gate with the
     # CI-green handoff gate (gc-68exu).
-    ("implementation-base", "implement"): ("../assets/scripts/checks/implementation-handoff-valid.sh", "5m"),
-    ("do-work", "implement"): ("../assets/scripts/checks/implementation-handoff-valid.sh", "5m"),
-    ("implementation-item-base", "implement-item"): ("../assets/scripts/checks/implementation-handoff-valid.sh", "5m"),
-    ("do-work-item", "implement-item"): ("../assets/scripts/checks/implementation-handoff-valid.sh", "5m"),
+    # A GitHub outage holds the rig's one-at-a-time dispatcher for the whole
+    # check timeout, and the gate itself takes seconds: two minutes, not five.
+    ("implementation-base", "implement"): ("../assets/scripts/checks/implementation-handoff-valid.sh", CI_GATE_CHECK_TIMEOUT),
+    ("do-work", "implement"): ("../assets/scripts/checks/implementation-handoff-valid.sh", CI_GATE_CHECK_TIMEOUT),
+    ("implementation-item-base", "implement-item"): ("../assets/scripts/checks/implementation-handoff-valid.sh", CI_GATE_CHECK_TIMEOUT),
+    ("do-work-item", "implement-item"): ("../assets/scripts/checks/implementation-handoff-valid.sh", CI_GATE_CHECK_TIMEOUT),
 }
 
 # Steps that hand a commit to review close only on green GitHub checks
@@ -259,10 +263,11 @@ CI_GREEN_HANDOFF_STEPS = {
 }
 # `gh` ignores SIGALRM, so the wrapper forks and terminates it (GNU timeout is
 # not installed on macOS).
-BOUNDED_CI_WAIT_COMMAND = (
-    "`perl -e '$t=shift; $p=fork; exec @ARGV unless $p; $SIG{ALRM}=sub{kill \"TERM\",$p; exit 124}; "
-    "alarm $t; waitpid $p,0; exit $?>>8' 1500 gh pr checks <number> --watch --interval 30`"
+BOUNDED_CI_WAIT_PERL = (
+    '$t=shift; $p=fork; exec @ARGV unless $p; $SIG{ALRM}=sub{kill "TERM",$p; exit 124}; '
+    "alarm $t; waitpid $p,0; exit($? & 127 ? 128+($? & 127) : $?>>8)"
 )
+BOUNDED_CI_WAIT_COMMAND = f"`perl -e '{BOUNDED_CI_WAIT_PERL}' 1500 gh pr checks <number> --watch --interval 30`"
 HARD_FAILURE_CLOSE_COMMAND = (
     '`gc bd update "<claimed-step-id>" --set-metadata gc.outcome=fail --set-metadata gc.failure_class=hard '
     '--set-metadata "gc.failure_reason='
@@ -2113,7 +2118,7 @@ class FormulaAssetTests(unittest.TestCase):
                 self.assertEqual(step["check"]["max_attempts"], 3)
                 self.assertEqual(
                     step["check"]["check"],
-                    {"mode": "exec", "path": f"../assets/scripts/checks/{script}", "timeout": "5m"},
+                    {"mode": "exec", "path": f"../assets/scripts/checks/{script}", "timeout": CI_GATE_CHECK_TIMEOUT},
                 )
                 for var_name in ("push", "open_pr"):
                     self.assertEqual(formula["vars"][var_name]["default"], "false")
@@ -2125,6 +2130,7 @@ class FormulaAssetTests(unittest.TestCase):
                     # The wait is bounded, and a stuck check has a way out.
                     BOUNDED_CI_WAIT_COMMAND,
                     "the wrapper ends it after 25 minutes (status 124)",
+                    "Any other status (128 or more: `gh` was ended by a signal) means the wait did not finish: run it again.",
                     "a bare `alarm` before `exec` does not stop `gh`",
                     "Do not replace it with a fixed sleep or a long poll interval",
                     "A check that is running gets another bounded wait, three waits at most.",
@@ -2140,10 +2146,16 @@ class FormulaAssetTests(unittest.TestCase):
                     "A failing test is fixed; it is never skipped, quarantined or re-baselined away.",
                     # A failure the base branch also has is reported with the
                     # evidence: not fixed on this branch, not ignored.
-                    "when the same check is red on the base branch's own most recent run of it, "
-                    "and the base branch does not require that check, the gate lets it pass and prints a `WARNING` line naming both runs",
+                    "when the same job of the same workflow is red on the base branch's own most recent run of it, "
+                    "at the same step, and the base branch does not require that check, the gate lets it pass and "
+                    "prints a `WARNING` line naming both runs and the step",
+                    "A job that fails at a step where the base branch's job passed is yours",
+                    "A red check from another app (a deployment preview such as Vercel) that the base branch "
+                    "does not require passes with a `WARNING` as well",
                     "Do not fix the base branch's failure on this branch, and do not pass over it in silence",
-                    "copy that `WARNING` line, with both run URLs, into",
+                    "copy each `WARNING` line, with its URLs, into",
+                    "If the gate says the pull request has merge conflicts, merge the base branch into",
+                    "GitHub runs no pull request checks on a conflicted pull request",
                     "The gate makes this call, not you: a red check that the base branch requires, "
                     "that is green on the base branch, or that the base branch has never run, blocks.",
                     # The honest exit when CI cannot be made green.
@@ -2171,6 +2183,39 @@ class FormulaAssetTests(unittest.TestCase):
             wrapper.index('exec "$SCRIPT_DIR/pr-ci-green.sh"'),
         )
         self.assertNotIn("|| exit 1", wrapper.split("SCRIPT_DIR=", 1)[1].split("done", 1)[1])
+
+    def test_the_documented_wait_wrapper_bounds_the_wait_and_never_reports_a_killed_wait_as_success(self) -> None:
+        if shutil.which("perl") is None:
+            self.skipTest("perl is not installed")
+
+        def wrapped(seconds: str, *command: str) -> int:
+            return subprocess.run(
+                ["perl", "-e", BOUNDED_CI_WAIT_PERL, seconds, *command], capture_output=True, timeout=30, check=False
+            ).returncode
+
+        self.assertEqual(wrapped("10", "true"), 0)
+        self.assertEqual(wrapped("10", "sh", "-c", "exit 1"), 1)  # gh pr checks: a check failed
+        self.assertEqual(wrapped("10", "sh", "-c", "exit 8"), 8)  # gh pr checks: still pending
+        self.assertEqual(wrapped("1", "sleep", "20"), 124)  # the bound
+        # A wait that was killed did not finish: `$? >> 8` alone reported 0.
+        self.assertEqual(wrapped("10", "sh", "-c", "kill -KILL $$"), 137)
+        self.assertEqual(wrapped("10", "sh", "-c", "kill -TERM $$"), 143)
+
+    def test_ci_gate_checks_time_out_sooner_than_the_other_artifact_gates(self) -> None:
+        # An infrastructure error holds the gate until the check timeout, and
+        # the rig's dispatcher runs one check at a time.
+        root = pathlib.Path(__file__).resolve().parents[1]
+        self.assertEqual(CI_GATE_CHECK_TIMEOUT, "2m")
+        for (formula_name, step_id), (script, _doc) in CI_GREEN_HANDOFF_STEPS.items():
+            with self.subTest(formula=formula_name, step=step_id):
+                step = {node["id"]: node for node in load_formula(root, formula_name)["steps"]}[step_id]
+                self.assertEqual(step["check"]["check"]["timeout"], "2m")
+        # A wrapper never turns "no verdict" (75) into a failed attempt (1).
+        for wrapper in ("implementation-handoff-valid.sh", "preflight-evidence-valid.sh"):
+            text = (root / "assets" / "scripts" / "checks" / wrapper).read_text(encoding="utf-8")
+            with self.subTest(wrapper=wrapper):
+                self.assertIn('"$SCRIPT_DIR/build-artifact-valid.sh" || exit $?', text)
+                self.assertNotIn('build-artifact-valid.sh" || exit 1', text)
 
     def test_review_family_reaches_every_review_through_a_gated_handoff(self) -> None:
         # build-from-plan / -decompose / -convoy: the first review follows the
@@ -4981,12 +5026,14 @@ description = "Override sink that writes the base triage report contract."
         extra_env: dict[str, str] | None = None,
         script_root: pathlib.Path | None = None,
         bead_errors: dict[str, str] | None = None,
+        check: str = "build-artifact-valid.sh",
+        timeout: float | None = None,
     ) -> subprocess.CompletedProcess:
         """bead_errors: extra files for the fake store, `<id>.error` (what
         `gc bd show <id>` prints when it fails) and `<id>.flaky` (how many
         times it fails before it answers)."""
         root = pathlib.Path(__file__).resolve().parents[1]
-        script = root / "assets" / "scripts" / "checks" / "build-artifact-valid.sh"
+        script = root / "assets" / "scripts" / "checks" / check
 
         if script_root is not None:
             installed_check_dir = script_root / ".gc" / "scripts" / "checks"
@@ -5052,6 +5099,7 @@ description = "Override sink that writes the base triage report contract."
                 text=True,
                 capture_output=True,
                 check=False,
+                timeout=timeout,
             )
 
     def _run_implementation_review_check(
@@ -5747,6 +5795,7 @@ description = "Override sink that writes the base triage report contract."
         parent_root_metadata: dict[str, str] | None = None,
         bead_errors: dict[str, str] | None = None,
         extra_env: dict[str, str] | None = None,
+        timeout: float | None = None,
     ) -> subprocess.CompletedProcess:
         """root_metadata replaces the default requirements key on the step's
         workflow root. parent_root_metadata adds the workflow that launched it
@@ -5789,7 +5838,7 @@ description = "Override sink that writes the base triage report contract."
             beads.setdefault("root", json.dumps([{"id": "root", "metadata": root_meta}]))
             env = {"GC_RIG_ROOT": str(root_dir)} if requirements_relative_to else {}
             return self._run_build_artifact_check(
-                beads, "loop", extra_env={**env, **(extra_env or {})}, bead_errors=bead_errors
+                beads, "loop", extra_env={**env, **(extra_env or {})}, bead_errors=bead_errors, timeout=timeout
             )
 
     def test_build_artifact_check_rejects_unpermitted_deferral_when_step_requires_permits(self) -> None:
@@ -5965,7 +6014,7 @@ description = "Override sink that writes the base triage report contract."
         )
         self.assertEqual(recovered.returncode, 0, recovered.stdout + recovered.stderr)
         self.assertIn("build-artifact-check: INFRA gc bd show root failed: dolt circuit breaker is open", recovered.stderr)
-        self.assertIn("without counting a failed attempt", recovered.stderr)
+        self.assertIn("retrying with backoff for up to 30s", recovered.stderr)
 
         down = self._run_coverage_permit_check(
             coverage_permit_plan(COVERAGE_PERMIT_QUOTE),
@@ -5990,6 +6039,43 @@ description = "Override sink that writes the base triage report contract."
         self.assertEqual(missing.returncode, 1, missing.stdout + missing.stderr)
         self.assertIn("bead gone does not exist", missing.stderr)
 
+    def test_build_artifact_check_default_retry_budget_is_unbounded_under_the_controller_and_45s_by_hand(self) -> None:
+        # The dispatcher counts an exit code as a failed attempt and a check
+        # still running at its timeout as "could not run". The script cannot
+        # know its check's timeout (2m, 5m, 20m), so under the controller
+        # (GC_ITERATION set) it has no budget of its own.
+        down = {"loop.error": "events: lock timed out\n", "loop.flaky": "100000"}
+        no_budget = {"BUILD_ARTIFACT_INFRA_BUDGET_SECONDS": ""}
+        for name, env, announced in (
+            ("controller", {**no_budget, "GC_ITERATION": "1"}, "retrying with backoff until the check times out; the controller then runs the check again without counting a failed attempt"),
+            ("by hand", {**no_budget, "GC_ITERATION": ""}, "retrying with backoff for up to 45s"),
+        ):
+            with self.subTest(name):
+                with self.assertRaises(subprocess.TimeoutExpired) as caught:
+                    self._run_coverage_permit_check(
+                        coverage_permit_plan(COVERAGE_PERMIT_QUOTE), bead_errors=down, extra_env=env, timeout=6
+                    )
+                stderr = caught.exception.stderr or b""
+                stderr = stderr.decode("utf-8") if isinstance(stderr, bytes) else stderr
+                self.assertIn("INFRA gc bd show loop failed: events: lock timed out", stderr)
+                self.assertIn(announced, stderr)
+                self.assertNotIn("INFRA no verdict", stderr)
+
+    def test_preflight_evidence_check_passes_no_verdict_through_unchanged(self) -> None:
+        # review.write-report runs preflight-evidence-valid.sh (20m timeout),
+        # which chains the artifact gate. `|| exit 1` there turned a store
+        # outage into a failed review attempt.
+        result = self._run_build_artifact_check(
+            {},
+            "loop",
+            bead_errors={"loop.error": "events: lock timed out\n", "loop.flaky": "100000"},
+            extra_env={"BUILD_ARTIFACT_INFRA_BUDGET_SECONDS": "1"},
+            check="preflight-evidence-valid.sh",
+        )
+
+        self.assertEqual(result.returncode, 75, result.stdout + result.stderr)
+        self.assertIn("INFRA no verdict: gc bd show loop kept failing", result.stderr)
+
     def test_coverage_permit_stages_carry_the_switch_and_explain_the_rule(self) -> None:
         root = pathlib.Path(__file__).resolve().parents[1]
 
@@ -6013,6 +6099,11 @@ description = "Override sink that writes the base triage report contract."
                     # Ids come from the requirements file, and a permit must
                     # hand the requirement off.
                     "`AC-1`, `SCOPE-2`, `REQ-3`",
+                    "out of scope, non-goals, open questions, background or verified",
+                    # A conditional requirement that does not apply.
+                    "`not_applicable`",
+                    "own conditional clause",
+                    "why the condition is false",
                     "hands the requirement off",
                     '"out of scope"',
                     "own statement",
@@ -6046,6 +6137,9 @@ description = "Override sink that writes the base triage report contract."
         self.assertIn("`permit`", skill)
         self.assertIn("in words the build gate recognises", skill)
         self.assertIn("the gate takes the ids from\nthe requirements file", skill)
+        self.assertIn("`AC-<n>`, `SCOPE-<n>` or `REQ-<n>`", skill)
+        self.assertIn("Write a conditional requirement with its condition first", skill)
+        self.assertIn("A conditional requirement (\"If only the test is wrong: ...\") whose condition\n  does not hold is `not_applicable`", plan)
         # Every hand-off phrase the docs teach is one the validator accepts.
         spec = importlib.util.spec_from_file_location(
             "validate_build_artifact_for_docs", root / "assets" / "scripts" / "validate_build_artifact.py"

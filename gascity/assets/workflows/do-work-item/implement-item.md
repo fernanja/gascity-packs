@@ -42,13 +42,14 @@ has already passed:
    it unmerged). Marking it ready belongs exclusively to the publish step,
    after review and repair-review approve.
 3. Wait for GitHub's checks on that commit, with a bound:
-   `perl -e '$t=shift; $p=fork; exec @ARGV unless $p; $SIG{ALRM}=sub{kill "TERM",$p; exit 124}; alarm $t; waitpid $p,0; exit $?>>8' 1500 gh pr checks <number> --watch --interval 30`.
+   `perl -e '$t=shift; $p=fork; exec @ARGV unless $p; $SIG{ALRM}=sub{kill "TERM",$p; exit 124}; alarm $t; waitpid $p,0; exit($? & 127 ? 128+($? & 127) : $?>>8)' 1500 gh pr checks <number> --watch --interval 30`.
    This `perl` wrapper is the time limit that works on macOS and Linux alike
    (GNU `timeout` is not installed on macOS, and a bare `alarm` before `exec`
    does not stop `gh`, which ignores that signal). The command returns by
    itself when the checks finish (0: green, 1: a check failed) and the wrapper
    ends it after 25 minutes (status 124), so it is not a blocking command of
-   the kind the shell rules forbid. If your shell tool allows less than that for one
+   the kind the shell rules forbid. Any other status (128 or more: `gh` was
+   ended by a signal) means the wait did not finish: run it again. If your shell tool allows less than that for one
    call, pass a smaller number of seconds, or run it in the background and
    wait for it to exit. Do not replace it with a fixed sleep or a long poll
    interval: a worker once sat an hour past the end of a run that way. If it
@@ -62,19 +63,25 @@ has already passed:
    broke it. Read the failed job's log (`gh run view <run-id> --log-failed`),
    fix the cause on the branch, commit, push, and wait again. A failing test
    is fixed; it is never skipped, quarantined or re-baselined away. A failure
-   the base branch also has is different: when the same check is red on the
-   base branch's own most recent run of it, and the base branch does not
-   require that check, the gate lets it pass and prints a `WARNING` line
-   naming both runs. Do not fix the base branch's failure on this branch, and
-   do not pass over it in silence: copy that `WARNING` line, with both run
-   URLs, into the summary's `## Remaining Risks`. The gate makes this call,
-   not you: a red check that the base branch requires, that is green on the
-   base branch, or that the base branch has never run, blocks. If the failure
-   is in CI's own machinery (a runner that died, a download that timed out),
-   you may rerun the failed job once (`gh run rerun <run-id> --failed`) and
-   must record in the summary that you did, with the run URL and both results.
-   The gate does not tell a flake from a defect: a check that is still red is
-   red.
+   the base branch also has is different: when the same job of the same
+   workflow is red on the base branch's own most recent run of it, at the same
+   step, and the base branch does not require that check, the gate lets it
+   pass and prints a `WARNING` line naming both runs and the step. A job that
+   fails at a step where the base branch's job passed is yours, whatever else
+   is red on the base branch. A red check from another app (a deployment
+   preview such as Vercel) that the base branch does not require passes with a
+   `WARNING` as well. Do not fix the base branch's failure on this branch, and
+   do not pass over it in silence: copy each `WARNING` line, with its URLs,
+   into the summary's `## Remaining Risks`. The gate makes this call, not you:
+   a red check that the base branch requires, that is green on the base
+   branch, or that the base branch has never run, blocks. If the gate says the
+   pull request has merge conflicts, merge the base branch into the work
+   branch, resolve them, push, and wait again: GitHub runs no pull request
+   checks on a conflicted pull request. If the failure is in CI's own
+   machinery (a runner that died, a download that timed out), you may rerun
+   the failed job once (`gh run rerun <run-id> --failed`) and must record in
+   the summary that you did, with the run URL and both results. The gate does
+   not tell a flake from a defect: a check that is still red is red.
 5. Before closing, run the gate yourself from the launcher rig root, the same
    script the controller runs when this step closes:
    `GC_BEAD_ID=<claimed-step-id> "$(gc formula list --json | python3 -c 'import json,os,sys; c=[os.path.join(os.path.dirname(p),"assets/scripts/checks/pr-ci-green.sh") for p in json.load(sys.stdin)["search_paths"]]; print([p for p in c if os.path.isfile(p)][-1])')"`.
@@ -203,9 +210,11 @@ Trace front matter must use the validator shape exactly:
   Markdown coverage table.
 - Every requirement id the requirements artifact defines needs a coverage
   entry, whether or not you list it under `ids`. The gate reads the ids from
-  the requirements file itself: labels such as `AC-1`, `SCOPE-2`, `REQ-3`,
-  `OQ-4` or `CON-5` that lead a list item, a heading or a paragraph. A summary
-  that leaves one out of both lists is rejected. The one exception is a build
+  the requirements file itself: labels such as `AC-1`, `SCOPE-2`, `REQ-3` that
+  lead a list item, a heading or a paragraph, except under a heading that says
+  out of scope, non-goals, open questions, background or verified. A summary
+  that leaves one out of both lists is rejected; other labels (`OQ-`, `OOS-`,
+  `CON-`) need an entry only if you list them. The one exception is a build
   split into several work items: each item's summary covers what its own work
   item delivers, and the gate does not ask it for every id.
 - A coverage entry with any status other than `covered` needs a `permit`
@@ -222,7 +231,10 @@ Trace front matter must use the validator shape exactly:
   rejects the summary when the permit is missing, its text is not there, or it
   hands nothing off (gc-gdyaz). If no root records a requirements artifact,
   the gate says so and names the command that records it; it never checks a
-  quote against the work item. "Not run", "no environment", "left for
+  quote against the work item. A conditional requirement ("If only the test is
+  wrong: ...") whose condition does not hold is `not_applicable`: its `permit`
+  quotes the requirement's own conditional clause and its `rationale` says why
+  the condition is false. "Not run", "no environment", "left for
   review" and "left for publish" are not permits: a required check that has
   not been run is work still to do. Run it and record the result. If it truly
   cannot be done here, write the summary with `status: blocked` and say what is

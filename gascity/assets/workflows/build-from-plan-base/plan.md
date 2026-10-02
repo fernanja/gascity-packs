@@ -24,9 +24,12 @@ modelling, and never skip verification.
 Account for every requirement. List each requirement and acceptance-criterion
 id of the requirements artifact under that artifact's `trace.upstream[].ids`,
 and give each a `trace.coverage` entry. The gate reads the ids from
-`{{requirements_path}}` itself (labels such as `AC-1`, `SCOPE-2`, `REQ-3`,
-`OQ-4` or `CON-5` that lead a list item, a heading or a paragraph), so an id
-left out of both lists is rejected, not overlooked. `covered` means this plan
+`{{requirements_path}}` itself: labels such as `AC-1`, `SCOPE-2`, `REQ-3` that
+lead a list item, a heading or a paragraph, except under a heading that says
+out of scope, non-goals, open questions, background or verified. An `AC-`,
+`SCOPE-` or `REQ-` id left out of both lists is rejected, not overlooked;
+other labels (`OQ-`, `OOS-`, `CON-`) need an entry only if you list them.
+`covered` means this plan
 delivers it and names how it is observed. Any other status (`deferred`,
 `blocked`, `out_of_scope`, `not_applicable`, `superseded`) needs, beside its
 `rationale`, a `permit`: the sentence in the requirements artifact that hands
@@ -58,6 +61,11 @@ is not a permit.
 - A requirement already satisfied on the base branch, or one that asks for no
   change, is `covered`, with the commit or the check as its evidence. It is
   not a deferral.
+- A conditional requirement ("If only the test is wrong: ...") whose condition
+  does not hold is `not_applicable`. Its `permit` quotes the requirement's own
+  conditional clause (the "if", "when" or "unless" part) and its `rationale`
+  says why the condition is false. This is the one case where a requirement's
+  own words are its permit.
 - Your own notes, discoveries and non-goals are not requirements. Keep them
   out of `ids` and coverage; they belong under `## Non-Goals` and the risks.
 - If the requirements do not allow leaving something out and the plan cannot

@@ -36,7 +36,9 @@ fail() {
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 if [ -x "$SCRIPT_DIR/build-artifact-valid.sh" ]; then
-  "$SCRIPT_DIR/build-artifact-valid.sh" || exit 1
+  # The exit code passes through unchanged: 75 is "no verdict" (the bead store
+  # kept failing), not a failed artifact.
+  "$SCRIPT_DIR/build-artifact-valid.sh" || exit $?
 fi
 
 BEAD_ID="${GC_BEAD_ID:-}"

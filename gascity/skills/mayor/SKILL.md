@@ -78,10 +78,15 @@ work", "follow-up bead", "separate bead", "mayor-owned" or "the mayor checks",
 requirement at any status other than `covered` only by quoting such a sentence
 as its `permit`; the gate rejects every other deferral, including a quote of
 the requirement's own statement, so a hand-off that lives only in a source
-document or in your head blocks the build. Give each requirement and acceptance
-criterion a label of capitals, a hyphen and a number (`AC-1`, `SCOPE-2`,
-`REQ-3`) at the start of its list item or heading: the gate takes the ids from
-the requirements file and requires a coverage entry for each.
+document or in your head blocks the build. Label each requirement and
+acceptance criterion `AC-<n>`, `SCOPE-<n>` or `REQ-<n>` at the start of its list
+item or heading: the gate takes the ids from
+the requirements file and requires a coverage entry for each. Labels with other
+prefixes (`OQ-`, `OOS-`, `CON-`), and anything under a heading that says out of
+scope, non-goals, open questions, background or verified, are not forced.
+Write a conditional requirement with its condition first ("If only the test is
+wrong: ..."), so that a plan can mark it `not_applicable` by quoting the
+condition and saying why it is false.
 
 When requirements forbid edits to a shared area (e.g. "no edits under
 `packages/ui`"), do not write a flat ban. Add a sanctioned exception: a minimal

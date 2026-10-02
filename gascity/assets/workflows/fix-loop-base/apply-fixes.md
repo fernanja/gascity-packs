@@ -36,13 +36,14 @@ commit whose result is red or unknown:
    title. Leave a draft a draft: marking it ready belongs exclusively to the
    publish step.
 2. Wait for GitHub's checks on the pushed commit, with a bound:
-   `perl -e '$t=shift; $p=fork; exec @ARGV unless $p; $SIG{ALRM}=sub{kill "TERM",$p; exit 124}; alarm $t; waitpid $p,0; exit $?>>8' 1500 gh pr checks <number> --watch --interval 30`.
+   `perl -e '$t=shift; $p=fork; exec @ARGV unless $p; $SIG{ALRM}=sub{kill "TERM",$p; exit 124}; alarm $t; waitpid $p,0; exit($? & 127 ? 128+($? & 127) : $?>>8)' 1500 gh pr checks <number> --watch --interval 30`.
    This `perl` wrapper is the time limit that works on macOS and Linux alike
    (GNU `timeout` is not installed on macOS, and a bare `alarm` before `exec`
    does not stop `gh`, which ignores that signal). The command returns by
    itself when the checks finish (0: green, 1: a check failed) and the wrapper
    ends it after 25 minutes (status 124), so it is not a blocking command of
-   the kind the shell rules forbid. If your shell tool allows less than that for one
+   the kind the shell rules forbid. Any other status (128 or more: `gh` was
+   ended by a signal) means the wait did not finish: run it again. If your shell tool allows less than that for one
    call, pass a smaller number of seconds, or run it in the background and
    wait for it to exit. Do not replace it with a fixed sleep or a long poll
    interval: a fix worker once sat an hour past the end of a run that way. If it
@@ -56,14 +57,21 @@ commit whose result is red or unknown:
    broke it. Read the failed job's log (`gh run view <run-id> --log-failed`),
    fix the cause, commit, push, and wait again. A failing test is fixed; it is
    never skipped, quarantined or re-baselined away. A failure the base branch
-   also has is different: when the same check is red on the base branch's own
-   most recent run of it, and the base branch does not require that check, the
-   gate lets it pass and prints a `WARNING` line naming both runs. Do not fix
-   the base branch's failure on this branch, and do not pass over it in
-   silence: copy that `WARNING` line, with both run URLs, into the fix
+   also has is different: when the same job of the same workflow is red on the
+   base branch's own most recent run of it, at the same step, and the base
+   branch does not require that check, the gate lets it pass and prints a
+   `WARNING` line naming both runs and the step. A job that fails at a step
+   where the base branch's job passed is yours, whatever else is red on the
+   base branch. A red check from another app (a deployment preview such as
+   Vercel) that the base branch does not require passes with a `WARNING` as
+   well. Do not fix the base branch's failure on this branch, and do not pass
+   over it in silence: copy each `WARNING` line, with its URLs, into the fix
    summary. The gate makes this call, not you: a red check that the base
    branch requires, that is green on the base branch, or that the base branch
-   has never run, blocks. If the failure is in CI's own machinery (a runner
+   has never run, blocks. If the gate says the pull request has merge
+   conflicts, merge the base branch into the branch under repair, resolve
+   them, push, and wait again: GitHub runs no pull request checks on a
+   conflicted pull request. If the failure is in CI's own machinery (a runner
    that died, a download that timed out), you may rerun the failed job once
    (`gh run rerun <run-id> --failed`) and must record that you did, with the
    run URL and both results, in the fix summary. The gate does not tell a

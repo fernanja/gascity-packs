@@ -5,11 +5,12 @@ set -euo pipefail
 #
 # A step that hands a commit to review may close only when that commit is the
 # head of an open DRAFT pull request and GitHub's checks on it are complete and
-# green: every check run and status finished, no workflow run for the commit
-# still queued or in progress, every status check the base branch requires
-# reported. A skipped check counts as green. A red check blocks unless the base
-# branch does not require it AND the base branch's own latest result for the
-# same check is red too; that case passes with a WARNING naming both runs.
+# green: every check finished, the latest run of every workflow for the commit
+# finished, every status check the base branch requires reported. A skipped
+# check counts as green. A red check blocks, with two exceptions that pass
+# with a WARNING: a GitHub Actions job the base branch does not require whose
+# latest run on the base branch (same workflow, same job) is red at the same
+# steps, and a check from another app that the base branch does not require.
 # Same conventions as build-artifact-valid.sh: reads $GC_BEAD_ID, resolves the
 # workflow root via gc.root_bead_id, prints failures on stderr for
 # gc.attempt_log, never prompts. The rules are spelled out in pr_ci_green.py.
@@ -26,12 +27,13 @@ set -euo pipefail
 # PASS or skipped line.
 #
 # Exit 0: green, or an explicit `skipped: <reason>` (no publishing intent and
-# no pull request, the remote is not GitHub, gh missing or signed out). With
-# publishing intent a skip is also a WARNING on stderr.
+# no pull request, the remote is not GitHub, gh missing). Every skip is on
+# stderr as well as stdout.
 # Exit 1: red, unfinished, no pull request, not a draft, head mismatch.
-# Exit 75: no verdict (GitHub or the bead store kept failing). Under the
-# controller the script keeps retrying past the check timeout instead, because
-# only a timeout is not counted as a failed attempt.
+# Exit 75: no verdict (GitHub or the bead store kept failing, or gh cannot
+# authenticate in a workflow that intends to publish). Under the controller
+# the script retries until the check timeout ends it instead, because only a
+# timeout is not counted as a failed attempt.
 #
 # It never waits for CI: the worker does that before closing its step (a
 # bounded `gh pr checks <n> --watch`; the step docs give the wrapper), because

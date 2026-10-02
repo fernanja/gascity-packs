@@ -34,8 +34,11 @@ set -euo pipefail
 # Exit codes: 0 valid; 1 invalid (a failed attempt); 75 no verdict, because
 # `gc bd show` kept failing for a reason that says nothing about the artifact.
 # The dispatcher counts any exit code as a failed attempt and only a check
-# still running at its timeout as "could not run", so under the controller
-# (GC_ITERATION is set) the retries outlast the "5m" check timeout.
+# still running at its timeout as "could not run". This script cannot know the
+# timeout of the check it runs in (2m, 5m, 20m), so under the controller
+# (GC_ITERATION is set) it retries until the controller ends it. Run by hand it
+# gives up after 45 seconds. A script that chains this one must pass its exit
+# code through unchanged.
 
 fail() {
   echo "build-artifact-check: $*" >&2
@@ -49,11 +52,18 @@ command -v python3 >/dev/null 2>&1 || fail "python3 is required on PATH"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 EXIT_NO_VERDICT=75
+# Seconds to keep retrying a failing bead read; empty means no limit.
 INFRA_BUDGET_SECONDS="${BUILD_ARTIFACT_INFRA_BUDGET_SECONDS:-}"
-if [ -z "$INFRA_BUDGET_SECONDS" ]; then
-  if [ -n "${GC_ITERATION:-}" ]; then INFRA_BUDGET_SECONDS=330; else INFRA_BUDGET_SECONDS=45; fi
+if [ -z "$INFRA_BUDGET_SECONDS" ] && [ -z "${GC_ITERATION:-}" ]; then
+  INFRA_BUDGET_SECONDS=45
 fi
 RETRY_SLEEP_SECONDS="${BUILD_ARTIFACT_RETRY_SLEEP_SECONDS:-2}"
+parent_pid() {
+  ps -o ppid= -p "$$" 2>/dev/null | tr -d ' '
+}
+# When a wrapper script is what the controller ended, this script is left
+# behind with no parent. It must not retry for ever.
+STARTED_PARENT="$(parent_pid)"
 
 WORK_TMP="$(mktemp -d)"
 cleanup() {
@@ -71,19 +81,28 @@ bd_show() {
       printf '%s' "$out"
       return 0
     fi
-    err="$(head -c 300 "$WORK_TMP/bd-show.err" | tr '\n' ' ')"
+    err="$(head -c 300 "$WORK_TMP/bd-show.err" | tr '\n' ' ' | sed 's/ *$//')"
     if printf '%s %s' "$out" "$err" | grep -Eqi 'no issues? found'; then
       echo "build-artifact-check: bead $id does not exist: $err" >&2
       return 1
     fi
-    if [ "$SECONDS" -ge "$INFRA_BUDGET_SECONDS" ]; then
+    if [ -n "$INFRA_BUDGET_SECONDS" ] && [ "$SECONDS" -ge "$INFRA_BUDGET_SECONDS" ]; then
       echo "build-artifact-check: INFRA no verdict: gc bd show $id kept failing: ${err:-no output}. Nothing was learned about the artifact; this is not a validation failure" >&2
+      return "$EXIT_NO_VERDICT"
+    fi
+    if [ "$STARTED_PARENT" != "1" ] && [ "$(parent_pid)" = "1" ]; then
+      echo "build-artifact-check: INFRA no verdict: gc bd show $id kept failing and the process that started this check is gone: ${err:-no output}" >&2
       return "$EXIT_NO_VERDICT"
     fi
     if [ -z "$announced" ]; then
       # Said now, not at the end: under the controller the check timeout ends
       # this process before it could say anything later.
-      echo "build-artifact-check: INFRA gc bd show $id failed: ${err:-no output}. This says nothing about the artifact, so there is no verdict yet; retrying with backoff. If it is still failing when the check times out, the controller runs the check again without counting a failed attempt" >&2
+      if [ -n "$INFRA_BUDGET_SECONDS" ]; then
+        how_long="for up to ${INFRA_BUDGET_SECONDS}s"
+      else
+        how_long="until the check times out; the controller then runs the check again without counting a failed attempt"
+      fi
+      echo "build-artifact-check: INFRA gc bd show $id failed: ${err:-no output}. This says nothing about the artifact, so there is no verdict yet; retrying with backoff $how_long" >&2
       announced=1
     fi
     sleep "$delay"
