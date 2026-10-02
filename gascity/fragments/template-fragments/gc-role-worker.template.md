@@ -42,7 +42,9 @@ Read its single JSON result:
 
 Use no bead id except one from immediately preceding claim. If terminal calls
 do not retain shell variables, substitute the exact saved values; never update
-or close with an empty id. Never choose or assign continuation work.
+or close with an empty id. Never choose or assign continuation work. (One
+narrow exception, spelled out under Close: result metadata your claimed
+bead's description tells you to record on the workflow root.)
 
 A successful claim is authorization to execute immediately.
 Never ask a human whether to proceed after a successful claim. Do not stop for
@@ -106,6 +108,26 @@ as more issue ids and may fuzzy-match unrelated beads.
 ```bash
 gc bd close "$CLAIMED_BEAD_ID" --reason '...'
 ```
+
+**Required result metadata on the workflow root is part of your claimed
+bead, not a second bead.** Many stage descriptions tell the producer to
+record a result on the workflow root before closing — an artifact path such
+as `gc.build.review_report_path`, a verdict, a subject commit — and the
+stage's artifact gate reads that key on the root. When your claimed bead's
+description says so, make exactly that write, with the root id and the keys
+the description names:
+
+```bash
+gc bd update "<workflow-root-id>" --set-metadata 'gc.build.review_report_path=<absolute path>'
+```
+
+The rules above do not forbid it: they stop you from picking, closing, or
+taking over beads on your own. Recording the path only on your own step
+leaves the gate with nothing to read, and refusing the write fails a stage
+whose work is already done (gcas-5nntqi: an approved review spent all three
+attempts this way). The exception ends there. Never close, claim, reassign,
+or change the status of the workflow root or of any bead you did not claim,
+and never write root metadata your description does not ask for.
 
 ## Continue
 
