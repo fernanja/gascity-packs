@@ -158,7 +158,13 @@ and re-check before closing. It must never be left for review to find.
   you checked.
 - Every required gate the plan names (e.g. the repo's preflight) was run, with
   its exit code recorded.
-- Every must-address checklist item on the work item is done.
+- Every must-address checklist item on the work item (MA-n, V-n, or the
+  item's own numbered list) is done AND listed here by id with its evidence
+  pointer: the test name or file:line that proves it, and the command plus
+  exit code that ran it. An item with no pointer fails this check; a
+  'shorter reading' of the item is not a disposition (gc-4ia4s5: a summary
+  reported two tests and no red run against an item naming three tests and
+  a deterministic failure; review caught it a round later).
 
 Write the summary as a `gc.build.implementation-summary.v1` artifact at a
 bead-scoped path outside the repo's tracked tree: `{{summary_path}}` when set,
