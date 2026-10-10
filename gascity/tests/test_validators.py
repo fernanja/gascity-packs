@@ -413,6 +413,37 @@ trace:
         with self.assertRaisesRegex(build_artifact_validator.ValidationError, "GC-METH-099"):
             build_artifact_validator.validate_artifact_text(missing, expected_schema="gc.build.requirements.v1")
 
+    def test_build_artifact_workflow_id_must_name_the_expected_root(self) -> None:
+        # gc-d09g6 (c): summary front matter copied from the previous work
+        # item named that item's root; the producer gate passes its own
+        # gc.root_bead_id and the validator compares.
+        schema = "gc.build.implementation-summary.v1"
+        text = self.valid_artifact(schema)
+        artifact = build_artifact_validator.validate_artifact_text(
+            text, expected_schema=schema, expected_workflow_id="build-20260609-001"
+        )
+        self.assertEqual(artifact.front_matter["workflow"]["id"], "build-20260609-001")
+        with self.assertRaisesRegex(
+            build_artifact_validator.ValidationError,
+            r"workflow\.id must be the workflow root this step produces for, 'gcas-o8gynk', got 'build-20260609-001'",
+        ):
+            build_artifact_validator.validate_artifact_text(
+                text, expected_schema=schema, expected_workflow_id="gcas-o8gynk"
+            )
+        # Without an expectation (a consumer validating by hand) any id passes.
+        build_artifact_validator.validate_artifact_text(text, expected_schema=schema)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "task-x-summary.md"
+            path.write_text(text, encoding="utf-8")
+            stderr = io.StringIO()
+            with redirect_stderr(stderr), redirect_stdout(io.StringIO()):
+                code = build_artifact_validator.main(
+                    ["--schema", schema, "--path", str(path), "--expect-workflow-id", "gcas-o8gynk"]
+                )
+            self.assertEqual(code, 1)
+            self.assertIn("workflow.id must be the workflow root", stderr.getvalue())
+            self.assertIn("gc-d09g6", stderr.getvalue())
+
     def test_build_artifact_cli_reports_errors_without_traceback(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             report = pathlib.Path(tmp) / "requirements.md"

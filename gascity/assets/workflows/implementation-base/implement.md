@@ -129,6 +129,12 @@ committed. Record the absolute path on the workflow root bead as
 worktree root, to a shared `.gc-artifacts/implementation-summary.md`, or to
 the root rollup `implementation-summary.md` (gc-6svtga, gcas-j201cw).
 
+The summary front matter's `workflow.id` is THIS workflow's root bead id: the
+`gc.root_bead_id` value on the claimed step bead, read now, never a value
+copied from another work item's summary file. The gate passes that id to the
+validator and rejects any other (gc-d09g6: task-gcas-onsl2r-summary.md named
+the previous item's root gcas-o8gynk, and only the consumer noticed).
+
 The commit holds only the change itself: stage changed files by name, never
 `git add -A` or `git add .`, and before committing confirm
 `git diff --cached --name-only` lists no summary, report, or other workflow
