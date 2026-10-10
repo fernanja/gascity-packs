@@ -2526,7 +2526,11 @@ class FormulaAssetTests(unittest.TestCase):
                 launch = rendered_step_text(root, formula, "repair-review")
                 for fragment in (
                     "It never waits for a loop itself",
-                    'gc bd dep list "<claimed-step-id>" --direction=up',
+                    'gc bd dep list "<claimed-step-id>" --direction=up --json',
+                    # The compiler inserts a scope-check bead after every
+                    # scope member, so decide-repair is two hops away.
+                    'gc bd dep list "<scope-check-id>" --direction=up --json',
+                    "ending in `repair-review-scope-check`",
                     'gc bd dep add "<decide-repair-bead-id>" "<loop-root-id>"',
                     "Add the edge BEFORE closing this step",
                     "`gc.build.repair_status=running`",

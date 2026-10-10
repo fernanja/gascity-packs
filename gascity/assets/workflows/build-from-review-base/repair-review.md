@@ -111,11 +111,15 @@ attempt the same way:
    it. Resolve a relative artifact root against the launcher rig root in
    `gc.work_dir`. The journal is the first thing a resuming operator reads
    (above), and `decide-repair` counts attempts from it.
-4. Block `decide-repair` on the loop root. Find the `decide-repair` step bead:
-   it is the dependent of this step bead whose `gc.step_id` ends in
-   `decide-repair` (`gc bd dep list "<claimed-step-id>" --direction=up
-   --json`, then read each entry's `metadata."gc.step_id"`; the other
-   dependent is the `review-body` scope bead). Then run
+4. Block `decide-repair` on the loop root. Find the `decide-repair` step bead
+   by walking this step's dependents two hops:
+   `gc bd dep list "<claimed-step-id>" --direction=up --json` lists the
+   scope-check bead the engine inserted after this step
+   (`metadata."gc.step_id"` ending in `repair-review-scope-check`);
+   `gc bd dep list "<scope-check-id>" --direction=up --json` lists that
+   bead's dependents, among them the `decide-repair` step bead
+   (`gc.step_id` ending in `decide-repair`, title "Decide repair outcome").
+   Never guess the id from a title search. Then run
    `gc bd dep add "<decide-repair-bead-id>" "<loop-root-id>"` and confirm with
    `gc bd dep list "<decide-repair-bead-id>"` that the loop root is listed
    `via blocks`. A workflow step is ready only when every bead it depends on
