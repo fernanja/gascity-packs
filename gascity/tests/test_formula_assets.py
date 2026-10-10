@@ -5656,6 +5656,75 @@ description = "Override sink that writes the base triage report contract."
             self.assertNotIn("/data/projects", text)
             self.assertNotIn("gascity-packs-worktrees", text)
 
+    # gc-0dbwj9: operators guessed the validator's entrypoint
+    # (validate_artifact_text) and its schema ids (plan-review for
+    # gc.build.plan_review.v1). Every step that validates states the exact
+    # command line and its schema id; the file-to-id table lives once.
+    VALIDATOR_RESOLVER = (
+        "python3 \"$(gc formula list --json | python3 -c 'import json,os,sys; "
+        "c=[os.path.join(os.path.dirname(p),\"assets/scripts/validate_build_artifact.py\") "
+        "for p in json.load(sys.stdin)[\"search_paths\"]]; print([p for p in c if os.path.isfile(p)][-1])')\""
+    )
+    INPUT_VALIDATING_STEPS = (
+        "build-from-review-base/finalize.md",
+        "build-base/finalize.md",
+        "build-basic/finalize.md",
+        "build-from-review-base/prepare-review.md",
+        "build-from-convoy-base/prepare-review.md",
+        "build-from-plan-base/prepare-decompose.md",
+        "build-from-decompose-base/prepare-decompose.md",
+        "build-from-plan-base/prepare-plan.md",
+    )
+
+    def test_every_validating_step_states_the_exact_validator_cli_and_schema_id(self) -> None:
+        root = pathlib.Path(__file__).resolve().parents[1]
+        schema_ids = set()
+        for path in sorted((root / "schemas" / "build").glob("*.yaml")):
+            (schema_id,) = re.findall(r"^schema_id: (\S+)$", path.read_text(encoding="utf-8"), re.MULTILINE)
+            schema_ids.add(schema_id)
+        self.assertEqual(len(schema_ids), 7)
+
+        table = (root / "assets" / "workflows" / "artifact-validation.md").read_text(encoding="utf-8")
+        tabled = set(re.findall(r"\| `(gc\.build\.[a-z_-]+\.v\d+)` \|", table))
+        self.assertEqual(tabled, schema_ids, "artifact-validation.md must table every schema file, and only those")
+        self.assertIn(f"{self.VALIDATOR_RESOLVER} --schema <schema id from the table> --path <artifact file>", table)
+        self.assertIn("there is no\n`validate_artifact_text` command", table)
+        self.assertIn("`plan-review.md`\ncarries `gc.build.plan_review.v1`", table)
+        self.assertIn(MANUAL_BUILD_ARTIFACT_CHECK_COMMAND, table)
+
+        # Producers: the shared paragraph names the step's own schema id and
+        # the one command line, and points at the table.
+        paragraphs = 0
+        for path in sorted((root / "assets" / "workflows").rglob("*.md")):
+            text = path.read_text(encoding="utf-8")
+            lines = [line for line in text.splitlines() if line.startswith("Artifact validation:")]
+            if not lines:
+                continue
+            paragraphs += 1
+            (line,) = lines
+            with self.subTest(asset=str(path.relative_to(root))):
+                (schema,) = re.findall(r"against schema `([^`]+)`", line)
+                self.assertIn(schema, schema_ids)
+                self.assertIn(f"The schema id of this artifact is `{schema}` (never the file name)", line)
+                self.assertIn(f"`{self.VALIDATOR_RESOLVER} --schema {schema} --path <artifact file>`", line)
+                self.assertIn("`assets/workflows/artifact-validation.md`", line)
+        self.assertEqual(paragraphs, 28)
+
+        # Consumers: finalize and the prepare-* gates read several artifacts,
+        # so they carry the table itself, identical everywhere.
+        blocks = set()
+        for relative in self.INPUT_VALIDATING_STEPS:
+            text = (root / "assets" / "workflows" / relative).read_text(encoding="utf-8")
+            with self.subTest(asset=relative):
+                start = text.index("Validating inputs:")
+                end = text.index("which goes into the stop record verbatim.\n", start)
+                block = text[start:end]
+                for schema in schema_ids:
+                    self.assertIn(f"`{schema}`", block)
+                self.assertIn(f"{self.VALIDATOR_RESOLVER} --schema <id from the table> --path <artifact file>", block)
+                blocks.add(block)
+        self.assertEqual(len(blocks), 1, "the consumer table drifted between steps")
+
     def test_producer_stages_gate_artifacts_with_bounded_repair(self) -> None:
         root = pathlib.Path(__file__).resolve().parents[1]
 
