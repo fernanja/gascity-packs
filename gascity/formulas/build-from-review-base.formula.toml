@@ -89,17 +89,24 @@ default = "false"
 description = "Set true to allow final PR creation after all checks pass."
 default = "false"
 
-# Review scope (gc-2ua7i). `prepare-review`, `review` and `repair-review` are
-# members of this scope. When `prepare-review` closes with a failed outcome the
-# engine skips `review` and `repair-review` and closes `review-body` with
-# gc.outcome=fail. `finalize` needs `review-body`, so it runs once either way.
-# Only the `prepare-*` gates carry gc.on_fail=abort_scope (a missing gc.outcome
-# counts as a failure). The other members stop the build only with an explicit
-# gc.outcome=fail. See "Stopping On A Failed Step" in ../REQUIREMENTS.md.
+# Review scope (gc-2ua7i). `prepare-review`, `review`, `repair-review` and
+# `decide-repair` are members of this scope. When `prepare-review` closes with
+# a failed outcome the engine skips `review`, `repair-review` and
+# `decide-repair` and closes `review-body` with gc.outcome=fail. `finalize`
+# needs `review-body`, so it runs once either way. Only the `prepare-*` gates
+# carry gc.on_fail=abort_scope (a missing gc.outcome counts as a failure). The
+# other members stop the build only with an explicit gc.outcome=fail. See
+# "Stopping On A Failed Step" in ../REQUIREMENTS.md.
+#
+# Repair is two steps (gc-2n9i3). `repair-review` launches the fix loop as a
+# standalone workflow, blocks `decide-repair` on that loop's root bead with a
+# native bd dependency (`gc bd dep add`), and closes, so no run-operator slot
+# is held while the loop runs. `decide-repair` becomes ready when the loop root
+# closes and records the repair outcome from the loop's final re-review.
 [[steps]]
 id = "review-body"
 title = "Build review scope"
-needs = ["repair-review"]
+needs = ["decide-repair"]
 metadata = { "gc.kind" = "scope", "gc.scope_name" = "build-review", "gc.scope_role" = "body" }
 description_file = "../assets/workflows/build-from-review-base/review-body.md"
 
@@ -130,6 +137,13 @@ title = "Repair or block continuation review findings"
 needs = ["review"]
 metadata = { "gc.scope_ref" = "review-body", "gc.scope_role" = "member", "gc.run_target" = "gc.run-operator" }
 description_file = "../assets/workflows/build-from-review-base/repair-review.md"
+
+[[steps]]
+id = "decide-repair"
+title = "Decide repair outcome"
+needs = ["repair-review"]
+metadata = { "gc.scope_ref" = "review-body", "gc.scope_role" = "member", "gc.run_target" = "gc.run-operator" }
+description_file = "../assets/workflows/build-from-review-base/decide-repair.md"
 
 [[steps]]
 id = "finalize"

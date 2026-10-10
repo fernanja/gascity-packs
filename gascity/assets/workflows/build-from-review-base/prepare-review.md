@@ -60,6 +60,7 @@ gc bd update "<workflow-root-id>" \
 Then close this step as failed:
 `gc bd update "<claimed-step-id>" --set-metadata "gc.outcome=fail"`, then
 `gc bd close "<claimed-step-id>" --reason "<what failed and where to restart>"`.
-The engine skips `review` and `repair-review` and runs `finalize` once.
+The engine skips `review`, `repair-review`, and `decide-repair` and runs
+`finalize` once.
 Finalize writes the blocked report from what this step recorded, so the
 values above are what the next person restarts from.

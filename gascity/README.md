@@ -239,8 +239,8 @@ drain item formulas, or review expansions instead of copying the suffix graph.
 
 A failed planning step stops a `build-from-*` build before anything is
 implemented. The steps before the implementation drain are members of one
-scope (`planning-body`), and `prepare-review`, `review`, and `repair-review`
-are members of a second (`review-body`). When a planning step closes with
+scope (`planning-body`), and `prepare-review`, `review`, `repair-review`, and
+`decide-repair` are members of a second (`review-body`). When a planning step closes with
 `gc.outcome=fail`, the rest of planning is skipped, the drain closes without
 dispatching work, `prepare-review` ends the build without a review, and
 `finalize` runs once to write the blocked report. A drain that fails because a
