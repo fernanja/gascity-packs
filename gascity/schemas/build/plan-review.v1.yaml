@@ -1,0 +1,47 @@
+# Plan-review artifact schema (gc-bzgp69, 2026-10-09). The plan-review step has written
+# `schema: gc.build.plan_review.v1` since the build-from-plan workflows shipped, but no
+# schema file existed, so validate_build_artifact.py rejected every plan review as an
+# unknown schema and nothing validated the artifact. Shape below mirrors what the step
+# writes today (reviewer/plan/requirements/base keys, verdict) plus what the shared validator
+# requires of every build artifact: `producer.{formula,stage,attempt}`, `status` (a mirror of
+# the verdict), and `trace` (upstream = the plan and requirements with their sha256 hashes;
+# coverage = one entry per requirement id, mirrored in a `## Coverage` table). Schema IDs are immutable
+# once published; breaking changes require gc.build.plan_review.v2.
+schema_id: gc.build.plan_review.v1
+artifact: plan_review
+allowed_statuses:
+  - approved
+  - questions
+  - changes_required
+  - blocked
+  - superseded
+required_front_matter:
+  - schema
+  - workflow.id
+  - workflow.formula
+  - producer.formula
+  - producer.stage
+  - producer.attempt
+  - reviewer.stage
+  - reviewer.bead_id
+  - plan.path
+  - plan.sha256
+  - requirements.path
+  - requirements.sha256
+  - verdict
+  - status
+  - trace
+coverage_statuses:
+  - covered
+  - not_applicable
+  - deferred
+  - blocked
+  - out_of_scope
+  - superseded
+required_sections:
+  - Verdict
+  - Requirement traceability
+  - Coverage
+  - Findings
+  - Must-Address Notes
+  - Fix Handoff

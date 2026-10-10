@@ -30,7 +30,21 @@ notes under `## Must-Address Notes` in the plan-review artifact.
 Decomposition copies each one into its owning work item as a checklist item.
 
 Write the plan-review artifact to `{{plan_review_path}}` when supplied;
-otherwise write it under `{{artifact_root}}`. Before closing this step, resolve
+otherwise write it under `{{artifact_root}}`. Its YAML front matter opens with
+`schema: gc.build.plan_review.v1` and carries, besides the `workflow`, `reviewer`,
+`plan`, `requirements` and `base` blocks you already write: `producer` (`formula:
+build-from-plan`, `stage: plan-review`, `attempt: <n>`), `verdict`, `status` equal
+to the verdict (`approved`, `questions`, `changes_required`, or `blocked`), and
+`trace` with `upstream` (the plan and the requirements, each as `path` and
+`hash: sha256:<sha256>`) and `coverage` (one `{id, status}` per requirement id
+the requirements artifact defines: `covered` when the plan covers it, otherwise
+`blocked` or `deferred` with a `rationale`). The body has the sections `## Verdict`,
+`## Requirement traceability`, `## Coverage` (a `| id | status |` table matching
+`trace.coverage`), `## Findings`, `## Must-Address Notes`, and `## Fix Handoff`.
+Before closing, validate it:
+`python3 ../assets/scripts/validate_build_artifact.py --schema gc.build.plan_review.v1 --path <artifact>`
+and fix the artifact until it passes (gc-bzgp69: plan reviews declared this
+schema for weeks while no schema file existed, so nothing validated them). Before closing this step, resolve
 the workflow root bead id from `gc.root_bead_id` on this step bead, then update
 THAT root bead's metadata (not this step bead's own metadata) with
 `gc.var.plan_review_path=<the resolved plan-review artifact path>`. The
