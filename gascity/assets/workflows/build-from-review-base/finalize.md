@@ -65,6 +65,68 @@ result:
 | implementation evidence | `implementation_evidence_missing` | `build-from-convoy` |
 | review report | `review_artifact_invalid` | `build-from-review` |
 
+## Final report shape
+
+The final report is a `gc.build.final-report.v1` artifact: Markdown with YAML
+front matter, mapping objects (never `workflow: build-from-plan`), and the
+coverage in BOTH forms the validator reads, which must match entry for entry:
+
+```markdown
+---
+schema: gc.build.final-report.v1
+workflow: {id: <workflow-root-id>, formula: <root workflow formula>}
+methodology: {pack: gascity, name: <root workflow formula>}
+producer: {formula: <root workflow formula>, stage: finalize, attempt: <positive integer>}
+status: approved   # or blocked
+trace:
+  upstream:
+    - {path: <requirements path>, hash: sha256:<digest>, ids: [REQ-1, AC-2]}
+    - {path: <review report path>, hash: sha256:<digest>}
+  coverage:
+    - {id: REQ-1, status: covered}
+    - {id: AC-2, status: blocked, rationale: <why the build did not deliver it>}
+---
+
+## Summary
+
+## Outcome
+
+## Coverage
+
+| id | status |
+| --- | --- |
+| REQ-1 | covered |
+| AC-2 | blocked |
+
+## Artifacts
+
+## Remaining Risks
+```
+
+The YAML `trace.coverage` list and the Markdown table are the same data twice
+and MUST MATCH: the same ids, the same status strings, none missing and none
+added (the validator compares them and reports `markdown coverage matrix
+must match YAML coverage`). The table's header row must have an `id` column
+and a `status` column, in that spelling (case does not matter, `| ID | Status |`
+is the same header); a table headed `Requirement` or `Result` is not found at
+all and the report fails with `markdown coverage matrix is missing`
+(gc-u7am1s: two finalize retries on 2026-10-09/10; gc-d09g6: gcas-tdkr6s).
+Do not add a second table that has both an `id` and a `status` column unless
+it repeats exactly the same pairs. Coverage statuses are not artifact
+statuses: `covered`, `not_applicable`, `deferred`, `blocked`, `out_of_scope`,
+`superseded`; never `approved`. The required `##` sections are `Summary`,
+`Outcome`, `Artifacts`, `Remaining Risks`, in that order.
+
+Before closing this step, record the report path on the workflow root as
+`gc.build.final_report_path` (`gc bd update "<workflow-root-id>"
+--set-metadata "gc.build.final_report_path=<absolute path>"`), then run the
+gate yourself from the launcher rig root (`gc.work_dir` on the workflow
+root), with the same script the controller runs when this step closes:
+`GC_BEAD_ID=<claimed-step-id> "$(gc formula list --json | python3 -c 'import json,os,sys; c=[os.path.join(os.path.dirname(p),"assets/scripts/checks/build-artifact-valid.sh") for p in json.load(sys.stdin)["search_paths"]]; print([p for p in c if os.path.isfile(p)][-1])')"`.
+Fix every reported error in the report until it prints `build artifact
+valid`: the validator's failures belong in this step's log, never in a later
+step's or a human's (gc-d09g6).
+
 **This step's own claimed bead.** The final report is this step's work
 product. Once a final report that validates is written and the terminal
 metadata is on the workflow root, close this bead with `gc.outcome=pass`:
