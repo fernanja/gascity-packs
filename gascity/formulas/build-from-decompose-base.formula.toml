@@ -63,11 +63,24 @@ default = ""
 description = "Decomposition methodology formula used to create implementation beads."
 default = "decomposition-base"
 
+# Input gate (gcas-6ut42h): the approved plan this entrypoint consumes is
+# validated by the controller when this step closes (one attempt; an input is
+# not repaired by the step that reads it). build-from-plan-base overrides this
+# step without the gate: there the plan was produced and validated in the
+# same workflow. See "Stopping On A Failed Step" in ../REQUIREMENTS.md.
 [[steps]]
 id = "prepare-decompose"
 title = "Validate decompose continuation inputs"
-metadata = { "gc.scope_ref" = "planning-body", "gc.scope_role" = "member", "gc.on_fail" = "abort_scope", "gc.run_target" = "gc.run-operator" }
+metadata = { "gc.scope_ref" = "planning-body", "gc.scope_role" = "member", "gc.on_fail" = "abort_scope", "gc.run_target" = "gc.run-operator", "gc.build.artifact_schema" = "gc.build.plan.v1", "gc.build.artifact_path_keys" = "gc.var.plan_path,gc.build.plan_path" }
 description_file = "../assets/workflows/build-from-decompose-base/prepare-decompose.md"
+
+[steps.check]
+max_attempts = 1
+
+[steps.check.check]
+mode = "exec"
+path = "../assets/scripts/checks/build-artifact-valid.sh"
+timeout = "5m"
 
 [[steps]]
 id = "decompose"

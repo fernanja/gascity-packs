@@ -190,6 +190,7 @@ BUILD_GATE_RESTART_ROWS = {
     ]),
     ("build-from-plan", "prepare-plan"): ("planning", [
         ("requirements_not_approved", "build-from-plan"),
+        ("requirements_artifact_invalid", "build-from-plan"),
         ("plan_inputs_invalid", "build-from-plan"),
     ]),
     ("build-from-plan", "prepare-decompose"): ("planning", [
@@ -197,6 +198,8 @@ BUILD_GATE_RESTART_ROWS = {
         ("plan_artifacts_missing", "build-from-plan"),
     ]),
     ("build-from-decompose", "prepare-decompose"): ("planning", [
+        ("plan_artifact_invalid", "build-from-plan"),
+        ("requirements_artifact_invalid", "build-from-plan"),
         ("plan_review_not_approved", "build-from-plan"),
         ("plan_artifacts_missing", "build-from-plan"),
     ]),
@@ -373,6 +376,25 @@ MANUAL_PR_CI_GREEN_COMMAND = (
 
 # One produce attempt plus two bounded schema-repair attempts per artifact stage.
 BUILD_ARTIFACT_GATE_MAX_ATTEMPTS = 3
+
+# Input gates (gcas-6ut42h): the first step of an entrypoint that consumes an
+# approved artifact validates it with the same gate script, one attempt. The
+# gate keeps gc.on_fail=abort_scope: with max_attempts = 1 there is no
+# re-spawned attempt bead for the engine to copy that key onto. The overrides
+# of these steps in the next base up carry no check: there the artifact was
+# produced and validated in the same workflow.
+BUILD_INPUT_VALIDATION_GATES = {
+    ("build-from-plan-base", "prepare-plan"): (
+        "gc.build.requirements.v1",
+        "gc.var.requirements_path,gc.build.requirements_path",
+    ),
+    ("build-from-decompose-base", "prepare-decompose"): (
+        "gc.build.plan.v1",
+        "gc.var.plan_path,gc.build.plan_path",
+    ),
+}
+BUILD_INPUT_GATE_MAX_ATTEMPTS = 1
+BUILD_INPUT_GATE_STEPS = {step_id for _formula, step_id in BUILD_INPUT_VALIDATION_GATES}
 
 # Producer stages whose artifact may leave a requirement uncovered only with a
 # permit quoting the requirements artifact (gc-gdyaz). The switch travels as
@@ -2186,8 +2208,14 @@ class FormulaAssetTests(unittest.TestCase):
                         if step_id.startswith("prepare-"):
                             # Gates are fail-closed: a gate closed with no
                             # gc.outcome stops the build.
-                            self.assertNotIn("check", step)
                             self.assertEqual(metadata.get("gc.on_fail"), "abort_scope")
+                            if "check" in step:
+                                # An input gate (gcas-6ut42h): one attempt,
+                                # so no re-spawned attempt bead ever carries
+                                # abort_scope.
+                                self.assertIn(step_id, BUILD_INPUT_GATE_STEPS)
+                                self.assertEqual(step["check"]["max_attempts"], BUILD_INPUT_GATE_MAX_ATTEMPTS)
+                                self.assertIn("gc.build.artifact_schema", metadata)
                         else:
                             # Every other member stops the build only with an
                             # explicit gc.outcome=fail. For a checked step
@@ -5708,7 +5736,7 @@ description = "Override sink that writes the base triage report contract."
                 self.assertIn(f"The schema id of this artifact is `{schema}` (never the file name)", line)
                 self.assertIn(f"`{self.VALIDATOR_RESOLVER} --schema {schema} --path <artifact file>`", line)
                 self.assertIn("`assets/workflows/artifact-validation.md`", line)
-        self.assertEqual(paragraphs, 28)
+        self.assertEqual(paragraphs, 30)
 
         # Consumers: finalize and the prepare-* gates read several artifacts,
         # so they carry the table itself, identical everywhere.
@@ -5752,6 +5780,55 @@ description = "Override sink that writes the base triage report contract."
                 self.assertIn("schema: gc.build.final-report.v1", text)
                 self.assertIn("    - {id: AC-2, status: blocked, rationale:", text)
                 self.assertIn("| id | status |\n| --- | --- |\n| REQ-1 | covered |\n| AC-2 | blocked |", text)
+
+    def test_entrypoints_validate_the_approved_artifact_they_consume_at_their_first_step(self) -> None:
+        # gcas-6ut42h: three mayor-written requirements files missing `W6H`
+        # or `Problem Statement` were consumed by build-from-plan and the
+        # gap surfaced at prepare-review a day later. The first step of the
+        # entrypoint now carries the gate on the input, one attempt.
+        root = pathlib.Path(__file__).resolve().parents[1]
+        for (formula_name, step_id), (schema, path_keys) in BUILD_INPUT_VALIDATION_GATES.items():
+            with self.subTest(formula=formula_name, step=step_id):
+                step = {node["id"]: node for node in load_formula(root, formula_name)["steps"]}[step_id]
+                self.assertEqual(step["metadata"].get("gc.on_fail"), "abort_scope")
+                self.assertEqual(step["metadata"]["gc.build.artifact_schema"], schema)
+                self.assertEqual(step["metadata"]["gc.build.artifact_path_keys"], path_keys)
+                self.assertEqual(step["check"]["max_attempts"], BUILD_INPUT_GATE_MAX_ATTEMPTS)
+                self.assertEqual(
+                    step["check"]["check"],
+                    {"mode": "exec", "path": BUILD_ARTIFACT_CHECK_SCRIPT, "timeout": "5m"},
+                )
+                text = node_description(root, step)
+                for fragment in (
+                    "**Input gate.**",
+                    "A\nnon-zero exit is a stop, not a warning" if step_id == "prepare-plan" else "A non-zero exit is a stop, not a\nwarning",
+                    "Record\nthe validator's `error:` line verbatim in `gc.restart.reason`" if step_id == "prepare-plan" else "Record the validator's `error:` line\nverbatim in `gc.restart.reason`",
+                    f"against schema `{schema}` when this step closes",
+                    "It is an input gate with one attempt",
+                    "There is no second attempt" if step_id == "prepare-decompose" else "there is no second attempt",
+                    "Validating inputs:",
+                ):
+                    self.assertIn(fragment, text)
+        # The same step ids one base up are overrides without the gate: the
+        # artifact was produced and validated in that workflow.
+        for formula_name, step_id in (
+            ("build-from-requirements-base", "prepare-plan"),
+            ("build-from-plan-base", "prepare-decompose"),
+        ):
+            with self.subTest(formula=formula_name, step=step_id, override=True):
+                step = {node["id"]: node for node in load_formula(root, formula_name)["steps"]}[step_id]
+                self.assertNotIn("check", step)
+                self.assertNotIn("gc.build.artifact_schema", step["metadata"])
+        # The resolved entrypoints see the gate only where the artifact is an input.
+        plan = {node["id"]: node for node in resolve_formula(root, "build-from-plan")["steps"]}
+        self.assertIn("check", plan["prepare-plan"])
+        self.assertNotIn("check", plan["prepare-decompose"])
+        requirements = {node["id"]: node for node in resolve_formula(root, "build-from-requirements")["steps"]}
+        self.assertNotIn("check", requirements["prepare-plan"])
+        decompose = {node["id"]: node for node in resolve_formula(root, "build-from-decompose")["steps"]}
+        self.assertIn("check", decompose["prepare-decompose"])
+        ledger = (root / "REQUIREMENTS.md").read_text(encoding="utf-8")
+        self.assertIn("The one exception is an input gate", ledger)
 
     def test_producer_stages_gate_artifacts_with_bounded_repair(self) -> None:
         root = pathlib.Path(__file__).resolve().parents[1]

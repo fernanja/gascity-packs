@@ -557,7 +557,7 @@ are not scope members. `finalize` needs `review-body`, and `publish` needs
 
 | Step shape | Step metadata | Stops the build when it closes |
 | --- | --- | --- |
-| `prepare-*` gate | `gc.scope_ref`, `gc.scope_role = "member"`, `gc.on_fail = "abort_scope"` | with `gc.outcome=fail`, with no `gc.outcome`, or with an unknown value |
+| `prepare-*` gate | `gc.scope_ref`, `gc.scope_role = "member"`, `gc.on_fail = "abort_scope"` (an input gate adds a one-attempt `build-artifact-valid.sh` check, below) | with `gc.outcome=fail`, with no `gc.outcome`, or with an unknown value; an input gate also when its check fails |
 | Any other member (`plan-review`, `repair-review`, `decide-repair`, and every checked step) | `gc.scope_ref`, `gc.scope_role = "member"` | with `gc.outcome=fail` only |
 | Drain | no scope metadata | never; `prepare-review` decides from the evidence |
 
@@ -579,7 +579,18 @@ written, including a `status: blocked` report.
 Checked steps do not carry `gc.on_fail = "abort_scope"`: the engine writes
 their control's `gc.outcome`, and it copies step metadata onto each re-spawned
 attempt bead, so `abort_scope` would stop a healthy build when a second
-attempt is closed with no `gc.outcome`. Known engine limits of scope
+attempt is closed with no `gc.outcome`. The one exception is an input gate
+(gcas-6ut42h): `build-from-plan-base.prepare-plan` and
+`build-from-decompose-base.prepare-decompose` carry both `abort_scope` and a
+`build-artifact-valid.sh` check with `max_attempts = 1` on the artifact the
+entrypoint consumes (`gc.var.requirements_path`, `gc.var.plan_path`). With
+one attempt there is no re-spawned attempt bead to copy the key onto; the
+compile-time attempt carries no scope metadata, and the control, which does,
+closes with the outcome the engine writes from the check. An approved input
+that does not validate therefore stops the build at its first step. The
+overrides of those steps in `build-from-requirements-base` and
+`build-from-plan-base` carry no check: there the artifact was produced and
+validated in the same workflow. Known engine limits of scope
 membership, which the pack cannot remove: a second or later attempt that
 closes with an explicit `gc.outcome=fail` stops the scope while attempts
 remain, and a member control or scope-check that the dispatcher quarantines

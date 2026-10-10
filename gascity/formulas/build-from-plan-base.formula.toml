@@ -33,11 +33,26 @@ default = ""
 description = "Plan-review artifact path to create or reuse."
 default = ""
 
+# Input gate (gcas-6ut42h): the approved requirements this entrypoint consumes
+# are validated by the controller when this step closes, so a file missing a
+# required section stops the build here, at minute one, not at prepare-review.
+# One attempt: an input is not repaired by the step that reads it. The gate
+# keeps gc.on_fail=abort_scope; with max_attempts = 1 there is no re-spawned
+# attempt bead for the engine to copy that key onto (see "Stopping On A
+# Failed Step" in ../REQUIREMENTS.md).
 [[steps]]
 id = "prepare-plan"
 title = "Validate plan continuation inputs"
-metadata = { "gc.scope_ref" = "planning-body", "gc.scope_role" = "member", "gc.on_fail" = "abort_scope", "gc.run_target" = "gc.run-operator" }
+metadata = { "gc.scope_ref" = "planning-body", "gc.scope_role" = "member", "gc.on_fail" = "abort_scope", "gc.run_target" = "gc.run-operator", "gc.build.artifact_schema" = "gc.build.requirements.v1", "gc.build.artifact_path_keys" = "gc.var.requirements_path,gc.build.requirements_path" }
 description_file = "../assets/workflows/build-from-plan-base/prepare-plan.md"
+
+[steps.check]
+max_attempts = 1
+
+[steps.check.check]
+mode = "exec"
+path = "../assets/scripts/checks/build-artifact-valid.sh"
+timeout = "5m"
 
 [[steps]]
 id = "plan"

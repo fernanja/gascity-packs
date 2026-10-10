@@ -20,6 +20,18 @@ only when the supplied requirements, implementation plan, and plan-review
 artifacts exist and the plan-review artifact records approval or an equivalent
 pass verdict.
 
+**Input gate.** "Exist and approved" is not enough: each of the three must
+validate against its schema (`requirements.md` → `gc.build.requirements.v1`,
+`implementation-plan.md` → `gc.build.plan.v1`, `plan-review.md` →
+`gc.build.plan_review.v1`; the command is under "Validating inputs"). Run the
+validator on all three before anything else. A non-zero exit is a stop, not a
+warning (gcas-6ut42h: approved requirements missing `W6H` and a plan review
+carrying the wrong schema id were consumed and the gap surfaced a day later).
+The controller re-checks the plan itself when this step closes (the artifact
+gate below). Do not edit an approved artifact to make it pass: a corrected
+file needs a new path from the launcher. Record the validator's `error:` line
+verbatim in `gc.restart.reason`.
+
 Record `gc.build.continuation_entrypoint=decompose` when this suffix is
 launched directly. Close only after the decompose stage can create or reuse the
 decomposition artifact and implementation convoy.
@@ -76,6 +88,8 @@ gc bd update "<workflow-root-id>" \
 | --- | --- | --- |
 | The plan-review verdict is `changes_required`, `blocked`, or `questions` | `plan_review_not_approved` | `build-from-plan` |
 | The plan or plan-review artifact is missing, or the review is of a different plan | `plan_artifacts_missing` | `build-from-plan` |
+| The plan or plan-review artifact does not validate against its schema (the validator names the first missing field or section) | `plan_artifact_invalid` | `build-from-plan` |
+| The requirements artifact does not validate against `gc.build.requirements.v1` | `requirements_artifact_invalid` | `build-from-plan` |
 | A downstream decompose selector is missing | `decompose_inputs_invalid` | `build-from-decompose` |
 
 A plan that was not approved has to be written again, so the restart is
@@ -90,3 +104,5 @@ drain closes without dispatching any work. `prepare-review` then ends the
 build without a review, and `finalize` runs once. Finalize writes the blocked
 report from what this step recorded, so the values above are what the next
 person restarts from.
+
+Artifact validation: this gate is checked by `../assets/scripts/checks/build-artifact-valid.sh`, which validates the artifact recorded at `gc.var.plan_path` (fallback `gc.build.plan_path`) on the workflow root against schema `gc.build.plan.v1` when this step closes. It is an input gate with one attempt: a failed check closes this step `gc.outcome=fail` and stops the planning scope, exactly as a validation failure you record yourself does, so run the validator on every input first and record the stop (table above) rather than letting the check find it. A step carries one check, so only the plan is checked by the controller; the requirements and the plan review are yours to validate above. There is no second attempt; the launcher restarts `build-from-plan` with corrected paths. The schema id of this artifact is `gc.build.plan.v1` (never the file name), and the validator's one entrypoint is its command line, run from the launcher rig root: `python3 "$(gc formula list --json | python3 -c 'import json,os,sys; c=[os.path.join(os.path.dirname(p),"assets/scripts/validate_build_artifact.py") for p in json.load(sys.stdin)["search_paths"]]; print([p for p in c if os.path.isfile(p)][-1])')" --schema gc.build.plan.v1 --path <artifact file>`; it exits 0 with `{"ok": true}` or 1 with one `error:` line to fix. The file-to-schema-id table for every build artifact is `assets/workflows/artifact-validation.md` in the same pack layer as that script (gc-0dbwj9: operators guessed a `validate_artifact_text` entrypoint and a `plan-review` schema id; neither exists).
