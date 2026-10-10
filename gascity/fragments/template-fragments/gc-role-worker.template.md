@@ -80,11 +80,20 @@ diagnosis before the budget ran out, in two unrelated rigs). If you mean
 
 `gc bd close` also enforces a separate, warn-only work-record gate: set
 `gc.work_outcome` to one of `shipped|no-op|blocked|abandoned`, and when it is
-`shipped`, also set `gc.work_commit` to the commit sha that shipped. This is
-independent of `gc.outcome` (pass/fail) — set both. If no single value or
-commit honestly fits (e.g. several refs touched, nothing merged to one sha),
-pick the closest honest value and explain the mismatch in the close reason
-rather than leaving it unset or inventing a misleading commit.
+`shipped`, also set `gc.work_commit` to the commit sha that shipped and
+`gc.work_branch` to the branch that carries it. Closing shipped work takes
+three fields, not two, in ONE update: the gate (ADR-0009) requires
+`gc.work_branch` for `shipped`, and nothing fills it for you. The engine stamps
+it at claim time from the worktree's branch, so a source anchor closed by a
+run-operator (not the claimed bead), or a bead claimed in a detached worktree,
+has none; a two-field update then warns `gc.work_outcome=shipped requires
+gc.work_branch` and costs a second update (gc-uckos: every shipped close in a
+21-item run). In a detached worktree the branch is the one you pushed to, not
+`HEAD`. This is independent of `gc.outcome` (pass/fail) — set both. If no
+single value, commit, or branch honestly fits (e.g. several refs touched,
+nothing merged to one sha), pick the closest honest value and explain the
+mismatch in the close reason rather than leaving it unset or inventing a
+misleading commit.
 
 Set required metadata before closing same claimed bead:
 
@@ -93,6 +102,7 @@ gc bd update "$CLAIMED_BEAD_ID" \
   --set-metadata 'gc.outcome=pass' \
   --set-metadata 'gc.work_outcome=shipped' \
   --set-metadata 'gc.work_commit=<sha>' \
+  --set-metadata 'gc.work_branch=<branch>' \
   --set-metadata 'example.key=example-value'
 gc bd close "$CLAIMED_BEAD_ID"
 ```
