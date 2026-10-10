@@ -14,7 +14,9 @@ authorization, and next action.
 Do not close the workflow root with `gc.outcome=pass` when an earlier build
 step stopped the build, the review verdict is `blocked` or `changes_required`,
 any implementation drain failed, required implementation evidence is missing,
-or `gc.build.repair_status` is anything other than `not_needed` or `approved`.
+or `gc.build.repair_status` is anything other than `not_needed` or `approved`
+(`running` means a fix loop was launched and `decide-repair` never recorded
+its outcome: blocked, not passed).
 In those cases, write a final report with `status: blocked`, record
 `gc.outcome=fail`, `gc.build.status=blocked`, `gc.failure_class` with the
 machine-readable reason, and preserve restart metadata such as
@@ -27,7 +29,7 @@ approved, and repair status is `not_needed` or `approved`.
 
 **When an earlier step stopped the build.** The build steps before this one
 sit in two scopes: planning (everything before the implementation drain) and
-review (`prepare-review`, `review`, `repair-review`). When a planning step
+review (`prepare-review`, `review`, `repair-review`, `decide-repair`). When a planning step
 closes with a failed outcome, the engine skips the rest of planning, the drain
 closes without running, `prepare-review` ends the review scope, and this step
 runs next. When `prepare-review` or `review` fails, the engine skips what is
@@ -41,8 +43,8 @@ status `blocked`.
 
 Read the workflow root before writing anything. If it already carries a
 `gc.failure_class` or a `gc.restart.entrypoint`, a step recorded the stop: a
-`prepare-*` gate, `plan-review`, or `repair-review` (`gc.build.blocked_step`
-names it). Keep the recorded `gc.failure_class`, `gc.restart.entrypoint`, and
+`prepare-*` gate, `plan-review`, `repair-review`, or `decide-repair`
+(`gc.build.blocked_step` names it). Keep the recorded `gc.failure_class`, `gc.restart.entrypoint`, and
 `gc.restart.reason` exactly as recorded, and add `gc.build.status=blocked` when
 it is missing. Never replace them with a later symptom such as missing
 implementation evidence: the first stop is the cause, and its entrypoint is
@@ -85,7 +87,7 @@ unresolved findings, the metadata is stale or wrong: do not close as
 `gc.outcome=fail`. Record `gc.failure_class=repair_status_contradicts_review`
 instead, leave the workflow root open with a report explaining the
 contradiction and citing both the metadata values and the artifact path/
-verdict you read, and stop for repair-review to reconcile rather than
+verdict you read, and stop for decide-repair to reconcile rather than
 finalizing on inconsistent inputs (this contradiction is exactly what shipped
 as a false failure in gc-jxl5x: workflow root gcas-gigyfp).
 
@@ -94,7 +96,7 @@ publish step can safely no-op, push, open a PR, or block with an explicit
 reason without changing the workflow outcome. Do not blank, reset, or
 otherwise touch `gc.build.review_subject_commit` -- the publish step trusts
 it as the sole source of the approved commit (gc-ajt3i) and it must still
-hold whatever value review/repair-review last recorded against the approving
+hold whatever value review/decide-repair last recorded against the approving
 verdict.
 
 Artifact validation: this stage is gated by `../assets/scripts/checks/build-artifact-valid.sh`, which validates the artifact recorded at `gc.build.final_report_path` against schema `gc.build.final-report.v1`. On repair attempts (`gc.attempt` greater than 1), read the validator errors from `gc.attempt_log` on the validation loop control bead (the dependent of this step bead) and repair the artifact in place instead of rewriting it. Two bounded repair attempts follow the first failure; exhausting them closes this stage with `gc.outcome=fail` and machine-readable validation errors that block downstream stages. Never ask questions in headless mode; record unresolved ambiguity inside the artifact.

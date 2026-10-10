@@ -549,7 +549,7 @@ scopes and leave the implementation drain outside both:
 | Scope body | Declared in | Members | Body needs |
 | --- | --- | --- | --- |
 | `planning-body` | `build-from-convoy-base` | every step before the drain: `prepare-requirements`, `requirements`, `prepare-plan`, `plan`, `plan-review`, `prepare-decompose`, `decompose`, `prepare-convoy` (those the entrypoint has) | `prepare-convoy` |
-| `review-body` | `build-from-review-base` | `prepare-review`, `review`, `repair-review` | `repair-review` |
+| `review-body` | `build-from-review-base` | `prepare-review`, `review`, `repair-review`, `decide-repair` | `decide-repair` |
 
 The drains (`implement`, `implement-same-session`) need `planning-body` and
 are not scope members. `finalize` needs `review-body`, and `publish` needs
@@ -558,7 +558,7 @@ are not scope members. `finalize` needs `review-body`, and `publish` needs
 | Step shape | Step metadata | Stops the build when it closes |
 | --- | --- | --- |
 | `prepare-*` gate | `gc.scope_ref`, `gc.scope_role = "member"`, `gc.on_fail = "abort_scope"` | with `gc.outcome=fail`, with no `gc.outcome`, or with an unknown value |
-| Any other member (`plan-review`, `repair-review`, and every checked step) | `gc.scope_ref`, `gc.scope_role = "member"` | with `gc.outcome=fail` only |
+| Any other member (`plan-review`, `repair-review`, `decide-repair`, and every checked step) | `gc.scope_ref`, `gc.scope_role = "member"` | with `gc.outcome=fail` only |
 | Drain | no scope metadata | never; `prepare-review` decides from the evidence |
 
 When a member stops its scope, the engine closes the members that have not

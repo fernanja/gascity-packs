@@ -29,7 +29,7 @@ the workflow root: the step that stopped the build recorded the cause, or
 **A drain that closed failed after running.** A drain closes
 `gc.outcome=fail` when any work item failed. That alone is not a reason to
 fail this gate. Decide from the evidence: pass when implementation evidence
-exists for the work that was done, and let `review` and `repair-review` deal
+exists for the work that was done, and let `review`, `repair-review` and `decide-repair` deal
 with what is missing or broken.
 
 **Validation passed.** Run
@@ -64,6 +64,7 @@ review.
 Then close this step as failed:
 `gc bd update "<claimed-step-id>" --set-metadata "gc.outcome=fail"`, then
 `gc bd close "<claimed-step-id>" --reason "<what failed and where to restart>"`.
-The engine skips `review` and `repair-review` and runs `finalize` once.
+The engine skips `review`, `repair-review`, and `decide-repair` and runs
+`finalize` once.
 Finalize writes the blocked report from what this step recorded, so the
 values above are what the next person restarts from.

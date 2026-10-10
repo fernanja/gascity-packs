@@ -100,6 +100,7 @@ BUILD_FROM_REVIEW_STEPS = {
     "prepare-review",
     "review",
     "repair-review",
+    "decide-repair",
     "finalize",
     "publish",
 }
@@ -130,7 +131,9 @@ BUILD_FROM_REQUIREMENTS_STEPS = BUILD_FROM_PLAN_STEPS | {
 # gc-2ua7i: a failed planning step stops a build-from-* build before anything
 # is implemented, and a failed review gate stops it before review. The steps
 # before the implementation drain are members of the `planning-body` scope;
-# prepare-review, review and repair-review are members of `review-body`. The
+# prepare-review, review, repair-review and decide-repair are members of
+# `review-body` (gc-2n9i3: repair-review launches the fix loop and closes;
+# decide-repair is blocked on the loop root and records the outcome). The
 # drains need `planning-body` and belong to neither scope; `finalize` needs
 # `review-body` and `publish` needs `finalize`.
 BUILD_PLANNING_BODY = "planning-body"
@@ -148,7 +151,7 @@ BUILD_SCOPE_BODIES = {
     },
 }
 BUILD_DRAIN_STEPS = {"implement", "implement-same-session"}
-BUILD_REVIEW_SCOPE_STEPS = {"prepare-review", "review", "repair-review"}
+BUILD_REVIEW_SCOPE_STEPS = {"prepare-review", "review", "repair-review", "decide-repair"}
 BUILD_UNSCOPED_STEPS = BUILD_DRAIN_STEPS | {"finalize", "publish"}
 BUILD_SCOPE_KEYS = ("gc.scope_ref", "gc.scope_role", "gc.on_fail")
 BUILD_FROM_FAMILY = (
@@ -859,10 +862,16 @@ def expansion_node_text(root: pathlib.Path, formula: str, step_id: str, suffix: 
 
 
 def repair_step_text(root: pathlib.Path, formula: str) -> str:
-    """Prose of the step that applies review findings for a build-* formula."""
+    """Prose of the step(s) that apply review findings for a build-* formula.
+
+    build-from-* repair is two steps (gc-2n9i3): repair-review launches the
+    loop, decide-repair reads its result. Rules about the outcome live in
+    the second; both are returned so a fragment may sit in either."""
     if formula == "build-basic":
         return expansion_node_text(root, formula, "review", ".apply-review-findings")
-    return rendered_step_text(root, formula, "repair-review")
+    return "\n".join(
+        rendered_step_text(root, formula, step_id) for step_id in ("repair-review", "decide-repair")
+    )
 
 
 def route_target_default(target: str, vars: dict) -> str:
@@ -1989,7 +1998,8 @@ class FormulaAssetTests(unittest.TestCase):
         self.assertEqual(steps["prepare-review"]["needs"], ["implement", "implement-same-session"])
         self.assertEqual(steps["review"]["needs"], ["prepare-review"])
         self.assertEqual(steps["repair-review"]["needs"], ["review"])
-        self.assertEqual(steps["review-body"]["needs"], ["repair-review"])
+        self.assertEqual(steps["decide-repair"]["needs"], ["repair-review"])
+        self.assertEqual(steps["review-body"]["needs"], ["decide-repair"])
         self.assertEqual(steps["finalize"]["needs"], ["review-body"])
         self.assertEqual(steps["publish"]["needs"], ["finalize"])
 
@@ -2092,7 +2102,8 @@ class FormulaAssetTests(unittest.TestCase):
         self.assertEqual(steps["prepare-review"]["needs"], ["implement", "implement-same-session"])
         self.assertEqual(steps["review"]["needs"], ["prepare-review"])
         self.assertEqual(steps["repair-review"]["needs"], ["review"])
-        self.assertEqual(steps["review-body"]["needs"], ["repair-review"])
+        self.assertEqual(steps["decide-repair"]["needs"], ["repair-review"])
+        self.assertEqual(steps["review-body"]["needs"], ["decide-repair"])
         self.assertEqual(steps["finalize"]["needs"], ["review-body"])
         self.assertEqual(steps["publish"]["needs"], ["finalize"])
 
@@ -2129,7 +2140,7 @@ class FormulaAssetTests(unittest.TestCase):
         ):
             with self.subTest(fragment=fragment):
                 self.assertIn(fragment, text)
-        for step_id in ("repair-review", "publish"):
+        for step_id in ("repair-review", "decide-repair", "publish"):
             with self.subTest(step=step_id):
                 step_text = rendered_step_text(root, "build-from-review-base", step_id)
                 self.assertIn("close THIS step's own claimed bead", step_text.replace("\n", " "))
@@ -2208,7 +2219,7 @@ class FormulaAssetTests(unittest.TestCase):
 
                 if has_planning:
                     self.assertEqual(steps[BUILD_PLANNING_BODY]["needs"], ["prepare-convoy"])
-                self.assertEqual(steps[BUILD_REVIEW_BODY]["needs"], ["repair-review"])
+                self.assertEqual(steps[BUILD_REVIEW_BODY]["needs"], ["decide-repair"])
                 # Finalize waits on the review body alone, so it runs once
                 # whether the members passed or a scope was stopped.
                 self.assertEqual(steps["finalize"]["needs"], [BUILD_REVIEW_BODY])
@@ -2280,7 +2291,7 @@ class FormulaAssetTests(unittest.TestCase):
                 with self.subTest(formula=formula, step=step["id"]):
                     self.assertEqual(step["metadata"].get("gc.scope_ref"), scope)
                     self.assertEqual(step["metadata"].get("gc.scope_role"), "member")
-        self.assertEqual(declared, 15)
+        self.assertEqual(declared, 16)
 
         ledger = (root / "REQUIREMENTS.md").read_text(encoding="utf-8")
         for fragment in (
@@ -2312,7 +2323,7 @@ class FormulaAssetTests(unittest.TestCase):
         root = pathlib.Path(__file__).resolve().parents[1]
         tails = {
             "planning": "the implementation\ndrain closes without dispatching any work. `prepare-review` then ends the\nbuild without a review, and `finalize` runs once",
-            "review": "The engine skips `review` and `repair-review` and runs `finalize` once",
+            "review": "The engine skips `review`, `repair-review`, and `decide-repair` and runs\n`finalize` once",
         }
         for (formula, step_id), (scope, rows) in BUILD_GATE_RESTART_ROWS.items():
             with self.subTest(formula=formula, step=step_id):
@@ -2405,12 +2416,23 @@ class FormulaAssetTests(unittest.TestCase):
                 "Otherwise record `gc.build.repair_status=blocked`, `gc.build.status=blocked`,\n`gc.build.blocked_step=repair-review`",
                 "gc.failure_class=review_repair_blocked",
                 "- `gc.build.status=blocked`\n- `gc.build.blocked_step=repair-review`\n- `gc.failure_class=review_changes_required`",
-                "Every stop this step records on the workflow root (report-mode `repairable`,\n`exhausted`, or `blocked`) also records `gc.build.status=blocked` and\n`gc.build.blocked_step=repair-review`",
+                "Every stop this step records on the workflow root (report-mode `repairable`\nor `blocked`) also records `gc.build.status=blocked` and\n`gc.build.blocked_step=repair-review`",
+            ),
+            # gc-2n9i3: the approve/exhausted/blocked decision moved to the
+            # step that runs after the fix loop closes.
+            "decide-repair": (
+                "Read the workflow root\nfirst",
+                "already carries a `gc.failure_class` or a\n`gc.restart.entrypoint`",
+                "exactly\nas recorded (gc-2ua7i); record only `gc.build.repair_status=blocked`",
+                "`gc.build.repair_status=blocked`, `gc.build.status=blocked`,\n`gc.build.blocked_step=decide-repair`",
+                "gc.failure_class=review_repair_blocked",
+                "gc.failure_class=review_repair_exhausted",
+                "Every stop this step records on the workflow root (`exhausted` or `blocked`)\nalso records `gc.build.status=blocked` and\n`gc.build.blocked_step=decide-repair`",
             ),
             "finalize": (
                 "Read the workflow root before writing anything",
                 "If it already carries a\n`gc.failure_class` or a `gc.restart.entrypoint`, a step recorded the stop",
-                "`prepare-*` gate, `plan-review`, or `repair-review`",
+                "`prepare-*` gate, `plan-review`, `repair-review`, or `decide-repair`",
                 "exactly as recorded, and add `gc.build.status=blocked` when\nit is missing",
                 "Never replace them with a later symptom",
                 "the first stop is the cause",
@@ -2431,28 +2453,79 @@ class FormulaAssetTests(unittest.TestCase):
                         self.assertIn(fragment, text)
 
     def test_repair_review_bare_close_does_not_fail_an_approved_build(self) -> None:
-        # repair-review is the last member of the review scope. With
-        # gc.on_fail=abort_scope a worker that closed it with no gc.outcome
-        # after an approved review failed the scope body, and through it the
-        # workflow root, while publish still ran and published. Without it, a
-        # bare close leaves the outcome to finalize and publish, which read
-        # the workflow root.
+        # decide-repair is the last member of the review scope (repair-review
+        # before gc-2n9i3). With gc.on_fail=abort_scope a worker that closed
+        # it with no gc.outcome after an approved review failed the scope
+        # body, and through it the workflow root, while publish still ran and
+        # published. Without it, a bare close leaves the outcome to finalize
+        # and publish, which read the workflow root.
         root = pathlib.Path(__file__).resolve().parents[1]
+        pass_rules = {
+            "repair-review": "- `gc.build.repair_status` is `not_needed`, or `running` with\n  `decide-repair` blocked on the loop root (step 4):\n  `gc bd update \"<claimed-step-id>\" --set-metadata \"gc.outcome=pass\"`",
+            "decide-repair": "- `gc.build.repair_status` is `not_needed` or `approved`:\n  `gc bd update \"<claimed-step-id>\" --set-metadata \"gc.outcome=pass\"`",
+        }
         for formula in ("build-from-plan", "build-from-review"):
+            steps = {step["id"]: step for step in resolve_formula(root, formula)["steps"]}
+            for step_id, pass_rule in pass_rules.items():
+                with self.subTest(formula=formula, step=step_id):
+                    metadata = steps[step_id]["metadata"]
+                    self.assertEqual(metadata.get("gc.scope_ref"), BUILD_REVIEW_BODY)
+                    self.assertNotIn("gc.on_fail", metadata)
+                    text = rendered_step_text(root, formula, step_id)
+                    for fragment in (
+                        "## Closing this step",
+                        "Always set `gc.outcome` on this step's own claimed bead before closing it",
+                        pass_rule,
+                        "- Any other `gc.build.repair_status`:\n  `gc bd update \"<claimed-step-id>\" --set-metadata \"gc.outcome=fail\"`",
+                        "A bead closed with no `gc.outcome` does not fail the build by itself",
+                    ):
+                        self.assertIn(fragment, text)
+
+    def test_repair_is_a_launch_step_and_a_decision_step_blocked_on_the_loop(self) -> None:
+        # gc-2n9i3: "Repair or block" held a run-operator slot for the whole
+        # fix loop (4.5 h, 59 waiting records on 2026-10-10) polling a loop
+        # that ran in another workflow. The formula cannot name a bead that
+        # exists only at runtime in `needs`, so repair-review adds the bd
+        # `blocks` edge itself -- the same edge the compiler wires for every
+        # `needs` -- and closes; decide-repair is ready when the loop closes.
+        root = pathlib.Path(__file__).resolve().parents[1]
+        for formula in ("build-from-plan", "build-from-decompose", "build-from-convoy", "build-from-review"):
+            steps = {step["id"]: step for step in resolve_formula(root, formula)["steps"]}
             with self.subTest(formula=formula):
-                steps = {step["id"]: step for step in resolve_formula(root, formula)["steps"]}
-                metadata = steps["repair-review"]["metadata"]
-                self.assertEqual(metadata.get("gc.scope_ref"), BUILD_REVIEW_BODY)
-                self.assertNotIn("gc.on_fail", metadata)
-                text = rendered_step_text(root, formula, "repair-review")
+                self.assertEqual(steps["decide-repair"]["needs"], ["repair-review"])
+                self.assertEqual(steps["decide-repair"]["metadata"]["gc.run_target"], "gc.run-operator")
+                self.assertEqual(steps["review-body"]["needs"], ["decide-repair"])
+                launch = rendered_step_text(root, formula, "repair-review")
                 for fragment in (
-                    "## Closing this step",
-                    "Always set `gc.outcome` on this step's own claimed bead before closing it",
-                    "- `gc.build.repair_status` is `not_needed` or `approved`:\n  `gc bd update \"<claimed-step-id>\" --set-metadata \"gc.outcome=pass\"`",
-                    "- Any other `gc.build.repair_status`:\n  `gc bd update \"<claimed-step-id>\" --set-metadata \"gc.outcome=fail\"`",
-                    "A bead closed with no `gc.outcome` does not fail the build by itself",
+                    "It never waits for a loop itself",
+                    'gc bd dep list "<claimed-step-id>" --direction=up',
+                    'gc bd dep add "<decide-repair-bead-id>" "<loop-root-id>"',
+                    "Add the edge BEFORE closing this step",
+                    "`gc.build.repair_status=running`",
+                    "Do not poll the loop, do not wait for it, and do not read its re-review",
+                    "not to\n   the `decide-repair` bead",
                 ):
-                    self.assertIn(fragment, text)
+                    self.assertIn(fragment, launch)
+                for stale in (
+                    "Keep this step open and claimed while that loop is open",
+                    "gc.failure_class=review_repair_exhausted",
+                ):
+                    self.assertNotIn(stale, launch)
+                decide = rendered_step_text(root, formula, "decide-repair")
+                for fragment in (
+                    "Confirm with `gc bd show \"<loop-root-id>\"` that it is closed",
+                    "Do not poll it",
+                    "gc session wait",
+                    "--on-beads \"<loop-root-id>\"",
+                    "MOST RECENT re-review artifact's own verdict",
+                    "**The next attempt.**",
+                    "fewer than max_iterations",
+                    "gc.failure_class=review_repair_exhausted",
+                    '--var "push={{push}}" \\\n  --var "open_pr={{open_pr}}"',
+                    "never close this step while a\nloop it launched is still open",
+                ):
+                    self.assertIn(fragment, decide)
+                self.assertNotIn("gc hook", decide)
 
     def test_finalize_records_a_blocked_build_once(self) -> None:
         # gc-2ua7i: finalize was told to close its own bead gc.outcome=fail
@@ -3139,8 +3212,8 @@ class FormulaAssetTests(unittest.TestCase):
     def test_repair_review_and_publish_do_not_depend_on_a_reaped_worktree(self) -> None:
         root = pathlib.Path(__file__).resolve().parents[1]
         for formula in ("build-from-plan", "build-from-review"):
-            repair = " ".join(rendered_step_text(root, formula, "repair-review").split())
-            with self.subTest(formula=formula, step="repair-review"):
+            repair = " ".join(rendered_step_text(root, formula, "decide-repair").split())
+            with self.subTest(formula=formula, step="decide-repair"):
                 # The approved commit is no longer read out of a worktree
                 # that a closed bead owns or that the re-reviewer removed.
                 self.assertNotIn("in the worktree that the MOST RECENT approving re-review actually reviewed", repair)
