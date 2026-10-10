@@ -7,6 +7,17 @@ implementation_formula={{implementation_formula}}, implementation_item_formula={
 and max_iterations={{max_iterations}} from the workflow root metadata and
 artifacts.
 
+Resuming this stage (the step bead was already claimed, or the workflow root
+already carries `gc.build.fix_loop_root_id`) starts with the repair-owner
+attempt journal, `{{artifact_root}}/repair-journal*.md` (`repair-journal.md`,
+or `repair-journal-attempt-<n>.md` per attempt), BEFORE the latest review or
+summary and before polling any loop. The journal names the running loop's root
+bead id, the step bead to poll, and every wait already explained, so a resumed
+session picks up where the previous one stopped instead of rediscovering it
+(gc-ndjvd: a resumed operator polled the repair loops for 70 minutes before
+opening the journal that already documented the dependency waits). Only then
+read the latest review or re-review artifact and the summary.
+
 If the review verdict is approved, do not mutate code. Record
 `gc.build.repair_status=not_needed`, preserve the approved review metadata, and
 close this step successfully.
@@ -74,7 +85,12 @@ launch until its re-review verdict has been read:
    finalized blocked 10 minutes after its second fix loop started; the loop
    went on to be approved with nothing left to publish it).
 3. Immediately after launch, record the new loop's root bead id as
-   `gc.build.fix_loop_root_id` on the workflow root.
+   `gc.build.fix_loop_root_id` on the workflow root, and append to the journal
+   `{{artifact_root}}/repair-journal.md`: the attempt number, the loop root
+   id, the step bead you poll and how (`gc bd show <id>`), the launch time,
+   and every dependency or wait you are blocked on, as you learn it. Resolve a
+   relative artifact root against the launcher rig root in `gc.work_dir`. The
+   journal is the first thing a resuming operator reads (above).
 4. Keep this step open and claimed while that loop is open. When the loop
    root closes, read the re-review artifact it produced. The loop root's own
    `gc.outcome=pass` means only that the loop ran to its end; the verdict is in
