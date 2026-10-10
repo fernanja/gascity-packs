@@ -5725,6 +5725,34 @@ description = "Override sink that writes the base triage report contract."
                 blocks.add(block)
         self.assertEqual(len(blocks), 1, "the consumer table drifted between steps")
 
+    def test_finalize_shows_both_coverage_forms_and_runs_the_gate_before_closing(self) -> None:
+        # gc-d09g6 (b), gc-u7am1s: the final-report prompt showed the YAML
+        # coverage block but not the Markdown table the validator pairs with
+        # it; operators headed the table "Requirement" and the report failed
+        # with "markdown coverage matrix is missing", two retries in a day.
+        root = pathlib.Path(__file__).resolve().parents[1]
+        for relative in (
+            "build-from-review-base/finalize.md",
+            "build-base/finalize.md",
+            "build-basic/finalize.md",
+        ):
+            text = (root / "assets" / "workflows" / relative).read_text(encoding="utf-8")
+            with self.subTest(asset=relative):
+                self.assertIn("coverage:", text)
+                self.assertTrue("| id | status |" in text or "| ID | Status |" in text, relative)
+                self.assertIn("MUST MATCH", text)
+                self.assertIn("markdown coverage matrix is missing", text)
+                self.assertIn("`Requirement`", text)
+                self.assertLess(text.index(MANUAL_BUILD_ARTIFACT_CHECK_COMMAND), text.index("Artifact validation:"))
+                self.assertIn("until it prints `build artifact\nvalid`", text)
+        for relative in ("build-from-review-base/finalize.md", "build-base/finalize.md"):
+            text = (root / "assets" / "workflows" / relative).read_text(encoding="utf-8")
+            with self.subTest(asset=relative, form="template"):
+                self.assertIn("## Final report shape", text)
+                self.assertIn("schema: gc.build.final-report.v1", text)
+                self.assertIn("    - {id: AC-2, status: blocked, rationale:", text)
+                self.assertIn("| id | status |\n| --- | --- |\n| REQ-1 | covered |\n| AC-2 | blocked |", text)
+
     def test_producer_stages_gate_artifacts_with_bounded_repair(self) -> None:
         root = pathlib.Path(__file__).resolve().parents[1]
 

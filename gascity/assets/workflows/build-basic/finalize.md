@@ -24,6 +24,13 @@ The validator only recognizes a Markdown table with an `ID` column and a
 | --- | --- |
 | REQ-001 | covered |
 
+The YAML `trace.coverage` list and this Markdown table are the same data
+twice and MUST MATCH: the same ids, the same status strings, none missing
+and none added. The header row must have an `id` column and a `status`
+column (case does not matter; `| id | status |` is the same header); a table
+headed `Requirement` or `Result` is not found at all and the report fails
+with `markdown coverage matrix is missing` (gc-u7am1s, gc-d09g6).
+
 Before writing `factory-run.md`, ensure the canonical implementation summary
 exists at the path recorded on the workflow root bead as
 `gc.build.implementation_summary_path`, normally `implementation-summary.md`.
@@ -98,7 +105,13 @@ Record the final report path on the workflow root bead as both
 Use `gc bd update "<workflow-root-id>" --set-metadata "gc.build.final_report_path=<absolute path>" --set-metadata "gc.build.factory_run_path=<absolute path>"`.
 Do not use `gc bd update --metadata 'key=value'`; `--metadata` only accepts a JSON
 object.
-Before closing this step, set the claimed step outcome with
+Before closing this step, run the gate yourself from the launcher rig root
+(`gc.work_dir` on the workflow root), with the same script the controller
+runs when this step closes:
+`GC_BEAD_ID=<claimed-step-id> "$(gc formula list --json | python3 -c 'import json,os,sys; c=[os.path.join(os.path.dirname(p),"assets/scripts/checks/build-artifact-valid.sh") for p in json.load(sys.stdin)["search_paths"]]; print([p for p in c if os.path.isfile(p)][-1])')"`.
+Fix every reported error in the report until it prints `build artifact
+valid` (gc-d09g6: the validator's failures belong in this step's log, never
+in a later step's). Then set the claimed step outcome with
 `gc bd update "<claimed-step-id>" --set-metadata "gc.outcome=pass"`, then close
 with `gc bd close "<claimed-step-id>" --reason "<concise reason>"`. Do not pass
 `--metadata` or `--set-metadata` to `gc bd close`.
