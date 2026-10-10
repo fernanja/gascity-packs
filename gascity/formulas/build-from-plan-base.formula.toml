@@ -58,8 +58,16 @@ timeout = "5m"
 id = "plan-review"
 title = "Review implementation plan"
 needs = ["plan"]
-metadata = { "gc.scope_ref" = "planning-body", "gc.scope_role" = "member", "gc.run_target" = "gc.review-synthesizer" }
+metadata = { "gc.scope_ref" = "planning-body", "gc.scope_role" = "member", "gc.run_target" = "gc.review-synthesizer", "gc.build.artifact_schema" = "gc.build.plan_review.v1", "gc.build.artifact_path_keys" = "gc.build.plan_review_path,gc.var.plan_review_path" }
 description_file = "../assets/workflows/build-from-plan-base/plan-review.md"
+
+[steps.check]
+max_attempts = 3
+
+[steps.check.check]
+mode = "exec"
+path = "../assets/scripts/checks/build-artifact-valid.sh"
+timeout = "5m"
 
 [[steps]]
 id = "prepare-decompose"

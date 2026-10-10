@@ -39,12 +39,34 @@ to the verdict (`approved`, `questions`, `changes_required`, or `blocked`), and
 `hash: sha256:<sha256>`) and `coverage` (one `{id, status}` per requirement id
 the requirements artifact defines: `covered` when the plan covers it, otherwise
 `blocked` or `deferred` with a `rationale`). The body has the sections `## Verdict`,
-`## Requirement traceability`, `## Coverage` (a `| id | status |` table matching
-`trace.coverage`), `## Findings`, `## Must-Address Notes`, and `## Fix Handoff`.
-Before closing, validate it:
-`python3 ../assets/scripts/validate_build_artifact.py --schema gc.build.plan_review.v1 --path <artifact>`
-and fix the artifact until it passes (gc-bzgp69: plan reviews declared this
-schema for weeks while no schema file existed, so nothing validated them). Before closing this step, resolve
+`## Requirement traceability`, `## Coverage`, `## Findings`, `## Must-Address
+Notes`, and `## Fix Handoff`, in that order. `## Coverage` is the Markdown
+coverage matrix the validator pairs with `trace.coverage`: a table whose header
+row has an `id` and a `status` column, then one row per `trace.coverage` entry
+with the same id and the same status string, none missing and none added:
+
+```markdown
+## Coverage
+
+| id | status | where the plan delivers it |
+| --- | --- | --- |
+| REQ-1 | covered | §3 step 2 |
+| AC-2 | deferred | permitted by requirements §Non-goals |
+```
+
+A requirement-by-requirement table under another heading, or without an `id`
+and a `status` column, does not count: the validator reports `markdown
+coverage matrix is missing` (gc-th9ra, gcas-ji08fk: approved plan reviews with
+a full `trace.coverage` and a `| id | where the plan delivers it | verified |`
+table failed at the review handoff and at finalize, a step and a day after
+they were approved). Record the artifact path on the workflow root (next
+paragraph), then run the gate yourself before closing, from the launcher rig
+root, with the same script the controller runs when this step closes:
+`GC_BEAD_ID=<claimed-step-id> "$(gc formula list --json | python3 -c 'import json,os,sys; c=[os.path.join(os.path.dirname(p),"assets/scripts/checks/build-artifact-valid.sh") for p in json.load(sys.stdin)["search_paths"]]; print([p for p in c if os.path.isfile(p)][-1])')"`.
+Fix every reported error in the artifact until it prints `build artifact
+valid`: the validator's failures belong in this step's log, never in a
+consumer's (gc-d09g6; gc-bzgp69: plan reviews declared this schema for weeks
+while no schema file existed, so nothing validated them). Before closing this step, resolve
 the workflow root bead id from `gc.root_bead_id` on this step bead, then update
 THAT root bead's metadata (not this step bead's own metadata) with
 `gc.var.plan_review_path=<the resolved plan-review artifact path>`. The
@@ -65,6 +87,8 @@ verdict: `gc bd update "<claimed-step-id>" --set-metadata "gc.outcome=pass"`,
 then `gc bd close "<claimed-step-id>" --reason "<verdict and one-line reason>"`.
 The verdict lives in the plan-review artifact. The next step,
 `prepare-decompose`, reads it and stops the build when it is not approved.
+
+Artifact validation: this stage is gated by `../assets/scripts/checks/build-artifact-valid.sh`, which validates the artifact recorded at `gc.build.plan_review_path` (fallback `gc.var.plan_review_path`) on the workflow root against schema `gc.build.plan_review.v1`, whatever the verdict. On repair attempts (`gc.attempt` greater than 1), read the validator errors from `gc.attempt_log` on the validation loop control bead (the dependent of this step bead) and repair the artifact in place instead of rewriting it. Two bounded repair attempts follow the first failure; exhausting them closes this stage with `gc.outcome=fail` and machine-readable validation errors that block downstream stages. Never ask questions in headless mode; record unresolved ambiguity inside the artifact.
 
 Close with `gc.outcome=fail` only when no verdict could be produced, for
 example because the plan artifact is missing or unreadable. Record the stop on

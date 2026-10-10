@@ -422,6 +422,10 @@ REQUIREMENTS_GATE = (
     "gc.build.requirements_path,gc.var.requirements_path",
 )
 PLAN_GATE = ("gc.build.plan.v1", "gc.build.plan_path,gc.var.plan_path")
+PLAN_REVIEW_GATE = (
+    "gc.build.plan_review.v1",
+    "gc.build.plan_review_path,gc.var.plan_review_path",
+)
 DECOMPOSITION_GATE = (
     "gc.build.decomposition.v1",
     "gc.build.decomposition_path,gc.var.decomposition_path",
@@ -476,6 +480,7 @@ BUILD_ARTIFACT_VALIDATION_GATES = {
     ("build-basic", "finalize"): FINAL_REPORT_GATE,
     ("build-from-requirements-base", "requirements"): REQUIREMENTS_GATE,
     ("build-from-plan-base", "plan"): PLAN_GATE,
+    ("build-from-plan-base", "plan-review"): PLAN_REVIEW_GATE,
     ("build-from-decompose-base", "decompose"): DECOMPOSITION_GATE,
     ("build-from-review-base", "review"): BUILD_REVIEW_GATE,
     ("build-from-review-base", "finalize"): FINAL_REPORT_GATE,
