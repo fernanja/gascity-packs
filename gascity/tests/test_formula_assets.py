@@ -6280,6 +6280,88 @@ description = "Override sink that writes the base triage report contract."
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("build artifact valid", result.stdout)
 
+    def _item_summary_artifact(self, workflow_id: str) -> str:
+        sections = "\n\n".join(
+            f"## {name}\n\n{name} text."
+            for name in ("Summary", "Intended Behavior", "Changed Files", "Verification", "Remaining Risks")
+        )
+        return (
+            "---\n"
+            "schema: gc.build.implementation-summary.v1\n"
+            f"workflow:\n  id: {workflow_id}\n  formula: do-work\n"
+            "methodology:\n  pack: gascity\n  name: do-work\n"
+            "producer:\n  formula: do-work\n  stage: implement\n  attempt: 1\n"
+            "status: approved\n"
+            "trace:\n"
+            "  upstream:\n"
+            "    - path: beads/item\n"
+            "      hash: bead:item\n"
+            "  coverage:\n"
+            "    - id: AC-1\n      status: covered\n"
+            "---\n\n"
+            "| id | status |\n| --- | --- |\n| AC-1 | covered |\n\n"
+            f"{sections}\n"
+        )
+
+    def test_build_artifact_check_rejects_a_summary_naming_another_workflow_root(self) -> None:
+        # gc-d09g6 (c): gcas-kjuk6b's task-gcas-onsl2r-summary.md named the
+        # previous item's root gcas-o8gynk; the consumer repaired it. The
+        # producer gate now passes the step's gc.root_bead_id to the
+        # validator for implementation summaries, and only for them: a plan
+        # or plan review may be an approved artifact reused from an earlier
+        # workflow.
+        control = (
+            '[{"id": "step", "metadata": {'
+            '"gc.root_bead_id": "root", '
+            '"gc.build.artifact_schema": "gc.build.implementation-summary.v1", '
+            '"gc.build.artifact_path_keys": "gc.implementation.summary_path"}}]'
+        )
+        with tempfile.TemporaryDirectory() as artifact_dir:
+            artifact = pathlib.Path(artifact_dir) / "task-item-summary.md"
+            root_bead = '[{"id": "root", "metadata": {' f'"gc.implementation.summary_path": "{artifact}"' "}}]"
+
+            artifact.write_text(self._item_summary_artifact("gcas-o8gynk"), encoding="utf-8")
+            wrong = self._run_build_artifact_check({"step": control, "root": root_bead}, "step")
+            artifact.write_text(self._item_summary_artifact("root"), encoding="utf-8")
+            right = self._run_build_artifact_check({"step": control, "root": root_bead}, "step")
+
+        self.assertEqual(wrong.returncode, 1, wrong.stdout + wrong.stderr)
+        self.assertIn("workflow.id must be the workflow root this step produces for, 'root', got 'gcas-o8gynk'", wrong.stderr)
+        self.assertEqual(right.returncode, 0, right.stdout + right.stderr)
+        self.assertIn("build artifact valid", right.stdout)
+        self.assertIn("workflow-id=root", right.stdout)
+
+        # A requirements artifact from another workflow is not held to it.
+        with tempfile.TemporaryDirectory() as artifact_dir:
+            artifact = pathlib.Path(artifact_dir) / "requirements.md"
+            artifact.write_text(self._valid_requirements_artifact(), encoding="utf-8")
+            control = (
+                '[{"id": "step", "metadata": {'
+                '"gc.root_bead_id": "root", '
+                '"gc.build.artifact_schema": "gc.build.requirements.v1", '
+                '"gc.build.artifact_path_keys": "gc.build.requirements_path"}}]'
+            )
+            root_bead = '[{"id": "root", "metadata": {' f'"gc.build.requirements_path": "{artifact}"' "}}]"
+            reused = self._run_build_artifact_check({"step": control, "root": root_bead}, "step")
+        self.assertEqual(reused.returncode, 0, reused.stdout + reused.stderr)
+        self.assertNotIn("workflow-id=", reused.stdout)
+
+    def test_summary_writers_state_the_workflow_id_field_explicitly(self) -> None:
+        root = pathlib.Path(__file__).resolve().parents[1]
+        for relative in (
+            "do-work/implement.md",
+            "do-work-item/implement-item.md",
+            "implementation-base/implement.md",
+            "implementation-item-base/implement-item.md",
+            "implement/summarize.md",
+            "build-base/summarize-implementation.md",
+        ):
+            text = " ".join((root / "assets" / "workflows" / relative).read_text(encoding="utf-8").split())
+            with self.subTest(asset=relative):
+                self.assertIn("`workflow.id` is THIS workflow's root bead id", text)
+                self.assertIn("never a value copied from another work item's summary file", text)
+                self.assertIn("The gate passes that id to the validator and rejects any other (gc-d09g6", text)
+
     def test_build_artifact_check_resolves_relative_path_from_rig_root(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             tmp = pathlib.Path(td)

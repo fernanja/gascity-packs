@@ -199,6 +199,7 @@ def validate_artifact_text(
     requirements_sources: list[tuple[str, str]] | None = None,
     requirements_hint: str = "",
     partial_coverage: str = "",
+    expected_workflow_id: str = "",
 ) -> BuildArtifact:
     """Validate one build artifact.
 
@@ -209,6 +210,8 @@ def validate_artifact_text(
     the error message, why the list is empty when it is. partial_coverage, when
     set, says why this artifact covers only part of the requirements (one item
     of a drain of several): the every-id rule is then not applied.
+    expected_workflow_id, when set, is the workflow root bead this artifact
+    is produced for: workflow.id must name it (validate_workflow_id).
     """
     schema_id, front_matter, body = parse_front_matter(text)
     if expected_schema and schema_id != expected_schema:
@@ -216,6 +219,8 @@ def validate_artifact_text(
 
     schema = load_schema(schema_id)
     validate_required_front_matter(front_matter, schema)
+    if expected_workflow_id:
+        validate_workflow_id(front_matter, expected_workflow_id)
     validate_status(front_matter, schema)
     trace = validate_trace(front_matter)
     upstream = validate_upstream(trace)
@@ -390,6 +395,24 @@ def validate_required_front_matter(front_matter: dict[str, Any], schema: dict[st
     attempt = get_path(front_matter, "producer.attempt")
     if not isinstance(attempt, int) or attempt < 1:
         raise ValidationError("producer.attempt must be a positive integer")
+
+
+def validate_workflow_id(front_matter: dict[str, Any], expected_workflow_id: str) -> None:
+    """workflow.id names the workflow root the producing step works for.
+
+    Summary front matter is often started from the previous work item's file,
+    and nothing else checks the id (gc-d09g6: task-gcas-onsl2r-summary.md
+    named the previous item's root gcas-o8gynk). The producer gate passes the
+    step's gc.root_bead_id here; a consumer validating by hand omits it.
+    """
+    actual = get_path(front_matter, "workflow.id")
+    actual_text = actual.strip() if isinstance(actual, str) else str(actual)
+    if actual_text != expected_workflow_id.strip():
+        raise ValidationError(
+            f"workflow.id must be the workflow root this step produces for, {expected_workflow_id!r}, "
+            f"got {actual_text!r}: set workflow.id to gc.root_bead_id of the claimed step bead; "
+            "the front matter was copied from another work item's summary (gc-d09g6)"
+        )
 
 
 def validate_status(front_matter: dict[str, Any], schema: dict[str, Any]) -> None:
@@ -865,6 +888,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         metavar="TEXT",
         help="Shown when a permit needs checking and no --requirements was resolved: why, and how to record the path",
     )
+    parser.add_argument(
+        "--expect-workflow-id",
+        default="",
+        metavar="BEAD_ID",
+        help="Require front matter workflow.id to be this workflow root bead id (the producer gate passes gc.root_bead_id)",
+    )
     return parser.parse_args(argv)
 
 
@@ -878,6 +907,7 @@ def main(argv: list[str] | None = None) -> int:
             requirements_sources=read_requirements_sources(args.requirements) if args.require_coverage_permits else None,
             requirements_hint=args.requirements_hint,
             partial_coverage=args.partial_coverage,
+            expected_workflow_id=args.expect_workflow_id,
         )
     except CLI_ERROR_TYPES as exc:
         print(f"error: {exc}", file=sys.stderr)

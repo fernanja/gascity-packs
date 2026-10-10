@@ -33,6 +33,11 @@ Write the artifact as Markdown with YAML front matter, not JSON. Use mapping obj
 
 - `schema: gc.build.implementation-summary.v1`
 - `workflow: {id: <workflow-root-id>, formula: <root-workflow-formula>}`
+  `workflow.id` is THIS workflow's root bead id: the `gc.root_bead_id` value on
+  the claimed step bead, read now, never a value copied from another work
+  item's summary file. The gate passes that id to the validator and rejects
+  any other (gc-d09g6: task-gcas-onsl2r-summary.md named the previous item's
+  root gcas-o8gynk, and only the consumer noticed).
 - `methodology: {pack: <pack-name>, name: <build-formula>}`
 - `producer: {formula: <build-formula>, stage: summarize-implementation, attempt: <positive integer>}`
 - `status: approved` or another schema-allowed status

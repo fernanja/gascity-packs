@@ -15,6 +15,14 @@ set -euo pipefail
 # stderr; the dispatcher records them in gc.attempt_log as repair context for
 # the next bounded producer attempt. This gate never prompts.
 #
+# An implementation summary (schema gc.build.implementation-summary.v1) must
+# also name the workflow root this step produces for in its front matter
+# workflow.id: the gate passes gc.root_bead_id as --expect-workflow-id. Summary
+# front matter is started from the previous work item's file, and nothing else
+# checked the id (gc-d09g6: task-gcas-onsl2r-summary.md named the previous
+# item's root). Other schemas are not held to it: a plan or plan review may
+# be an approved artifact reused from an earlier workflow.
+#
 # Optional step metadata:
 #   gc.build.coverage_permits=required - the artifact must have a coverage entry
 #     for every requirement id the requirements artifact defines, and may leave
@@ -216,6 +224,11 @@ done
 
 VALIDATOR_ARGS=(--schema "$SCHEMA" --path "$ARTIFACT_PATH")
 PERMIT_NOTE=""
+
+if [ "$SCHEMA" = "gc.build.implementation-summary.v1" ] && [ -n "$ROOT_ID" ] && [ "$ROOT_ID" != "$BEAD_ID" ]; then
+  VALIDATOR_ARGS+=(--expect-workflow-id "$ROOT_ID")
+  PERMIT_NOTE=" workflow-id=$ROOT_ID"
+fi
 
 if [ "$(metadata_value "$SHOW_JSON" "gc.build.coverage_permits")" = "required" ]; then
   VALIDATOR_ARGS+=(--require-coverage-permits)
