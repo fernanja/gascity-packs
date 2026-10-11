@@ -142,4 +142,25 @@ This is the only sha the publish step is allowed to treat as approved for
 push/PR purposes (gc-ajt3i: a publish step trusted a stale pre-repair commit
 here and opened a PR 3 approved commits behind).
 
+## Closing this step
+
+The result lives on the workflow root (`gc.root_bead_id` on your claimed step
+bead), not on the step bead and not in a mail to the mayor; writing it there
+is part of this step (gc-xhumy: a reviewer recorded the fields on its own
+step bead and mailed the mayor to mirror them, and the build waited for the
+copy). Before closing, run exactly these, in this order:
+
+1. Record the result on the root, in one update:
+   `gc bd update "<workflow-root-id>" --set-metadata "gc.build.review_report_path=<absolute report path>" --set-metadata "gc.build.review_verdict=<approved|changes_required|blocked>"`,
+   with `--set-metadata "gc.build.review_subject_commit=<sha>"` added when
+   the verdict is `approved`.
+2. Check that it landed:
+   `gc bd show "<workflow-root-id>" --json | jq -r '(if type == "array" then .[0] else . end).metadata | .["gc.build.review_report_path"], .["gc.build.review_verdict"]'`
+   must print the path and the verdict you set, nothing else.
+3. Run the gate yourself, `build-artifact-valid.sh` (the command is under
+   Artifact validation below): it reads `gc.build.review_report_path` from
+   the root and fails with `no artifact path recorded on workflow root` when
+   step 1 was skipped.
+4. Set `gc.outcome=pass` on your claimed step bead and close it.
+
 Artifact validation: this stage is gated by `../assets/scripts/checks/build-artifact-valid.sh`, which validates the artifact recorded at `gc.build.review_report_path` against schema `gc.build.review.v1`. On repair attempts (`gc.attempt` greater than 1), read the validator errors from `gc.attempt_log` on the validation loop control bead (the dependent of this step bead) and repair the artifact in place instead of rewriting it. Two bounded repair attempts follow the first failure; exhausting them closes this stage with `gc.outcome=fail` and machine-readable validation errors that block downstream stages. Never ask questions in headless mode; record unresolved ambiguity inside the artifact. The schema id of this artifact is `gc.build.review.v1` (never the file name), and the validator's one entrypoint is its command line, run from the launcher rig root: `python3 "$(gc formula list --json | python3 -c 'import json,os,sys; c=[os.path.join(os.path.dirname(p),"assets/scripts/validate_build_artifact.py") for p in json.load(sys.stdin)["search_paths"]]; print([p for p in c if os.path.isfile(p)][-1])')" --schema gc.build.review.v1 --path <artifact file>`; it exits 0 with `{"ok": true}` or 1 with one `error:` line to fix. The file-to-schema-id table for every build artifact is `assets/workflows/artifact-validation.md` in the same pack layer as that script (gc-0dbwj9: operators guessed a `validate_artifact_text` entrypoint and a `plan-review` schema id; neither exists).

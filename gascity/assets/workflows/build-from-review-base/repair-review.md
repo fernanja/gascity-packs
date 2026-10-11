@@ -33,9 +33,11 @@ the summary. A resumed session whose loop is already running has one job
 left: make sure `decide-repair` is blocked on that loop (step 4 below), then
 close this step.
 
-If the review verdict is approved, do not mutate code. Record
-`gc.build.repair_status=not_needed`, preserve the approved review metadata, and
-close this step successfully.
+If the review verdict is approved, do not mutate code. Record the status on
+the workflow root,
+`gc bd update "<workflow-root-id>" --set-metadata "gc.build.repair_status=not_needed"`,
+preserve the approved review metadata, and close this step successfully
+(closing section below).
 
 If the review verdict is `changes_required` and review_mode=report, do not
 mutate code. Write a repair handoff artifact that names the selected
@@ -167,6 +169,17 @@ or `blocked`) also records `gc.build.status=blocked` and
 `gc.restart.*` values. Finalize keeps a recorded stop and derives one only
 when none is recorded. Then also close THIS step's own claimed bead with the
 same outcome, as below.
+
+Every `gc.build.repair_status` this step decides is written on the workflow
+root (`gc.root_bead_id` on your claimed step bead) with
+`gc bd update "<workflow-root-id>" --set-metadata "gc.build.repair_status=<value>"`
+BEFORE the step closes, never only in a close reason, a mail or the journal:
+no check script gates this step, and finalize waits on that key (gc-xhumy: a
+step closed pass with "Repair not_needed" in its reason and nothing on the
+root; finalize waited 25 minutes until the mayor wrote it). Last thing before
+`gc bd close`:
+`gc bd show "<workflow-root-id>" --json | jq -r '(if type == "array" then .[0] else . end).metadata["gc.build.repair_status"]'`
+must print the value you decided.
 
 Always set `gc.outcome` on this step's own claimed bead before closing it:
 
