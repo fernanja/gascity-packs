@@ -247,6 +247,13 @@ class BuildArtifactValidatorTests(unittest.TestCase):
             "Findings",
             "Verification",
         ],
+        "gc.build.repair-summary.v1": [
+            "Repair",
+            "Findings Addressed",
+            "Coverage",
+            "Self-Check",
+            "Changed Files",
+        ],
         "gc.build.final-report.v1": [
             "Summary",
             "Outcome",
@@ -260,7 +267,12 @@ class BuildArtifactValidatorTests(unittest.TestCase):
         "gc.build.decomposition.v1": "approved",
         "gc.build.implementation-summary.v1": "approved",
         "gc.build.review.v1": "approved",
+        "gc.build.repair-summary.v1": "fixed",
         "gc.build.final-report.v1": "approved",
+    }
+    # Front matter a schema requires beyond the shared set (gc-0d4124).
+    SCHEMA_EXTRA_FRONT_MATTER = {
+        "gc.build.repair-summary.v1": "repair:\n  commit: 8117d8a152c7449fd69f9c5cdd6eef2ec7495ecf\n  branch: gcas-zpsobi-accounts-tab-to-reports\n",
     }
     SCHEMA_FILES = {
         "gc.build.requirements.v1": "requirements.v1.yaml",
@@ -268,6 +280,7 @@ class BuildArtifactValidatorTests(unittest.TestCase):
         "gc.build.decomposition.v1": "decomposition.v1.yaml",
         "gc.build.implementation-summary.v1": "implementation-summary.v1.yaml",
         "gc.build.review.v1": "review.v1.yaml",
+        "gc.build.repair-summary.v1": "repair-summary.v1.yaml",
         "gc.build.final-report.v1": "final-report.v1.yaml",
     }
     SCHEMA_ROOT = pathlib.Path(__file__).resolve().parents[1] / "schemas" / "build"
@@ -277,7 +290,7 @@ class BuildArtifactValidatorTests(unittest.TestCase):
         sections = []
         for section in self.SCHEMA_SECTIONS[schema]:
             content = f"{section} content."
-            if section in {"Example Mapping", "Summary", "Verdict"}:
+            if section in {"Example Mapping", "Summary", "Verdict", "Coverage"}:
                 content += (
                     "\n\n| ID | Status |\n"
                     "| --- | --- |\n"
@@ -298,7 +311,7 @@ producer:
   formula: planning-base
   stage: requirements
   attempt: 1
-status: {self.SCHEMA_STATUS[schema]}
+{self.SCHEMA_EXTRA_FRONT_MATTER.get(schema, "")}status: {self.SCHEMA_STATUS[schema]}
 trace:
   upstream:
     - path: requirements.after.md

@@ -183,6 +183,7 @@ class ArtifactHelperTests(unittest.TestCase):
             "decomposition.v1.yaml": "gc.build.decomposition.v1",
             "implementation-summary.v1.yaml": "gc.build.implementation-summary.v1",
             "review.v1.yaml": "gc.build.review.v1",
+            "repair-summary.v1.yaml": "gc.build.repair-summary.v1",
             "final-report.v1.yaml": "gc.build.final-report.v1",
         }
 

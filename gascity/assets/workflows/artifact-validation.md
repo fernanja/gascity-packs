@@ -18,6 +18,7 @@ table change together.
 | `decomposition.md` | `gc.build.decomposition.v1` | decompose stage |
 | `task-<bead-id>-summary.md`, `implementation-summary.md` | `gc.build.implementation-summary.v1` | implementation item, summarize, summarize-implementation stages |
 | `review.md`, `re-review*.md`, review reports | `gc.build.review.v1` | review, re-review and code-review stages |
+| `repair-summary-<step-id>.md` | `gc.build.repair-summary.v1` | fix-loop apply-fixes stage (the repair self-check record decide-repair reads; decide-repair reconstructs it from the step's close reason when absent) |
 | `final-report.md`, `factory-run.md` | `gc.build.final-report.v1` | finalize stage |
 
 The validator has one entrypoint, its command line. It is

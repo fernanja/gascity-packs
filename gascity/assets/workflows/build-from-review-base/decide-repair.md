@@ -64,14 +64,59 @@ you are about to cite and confirm its own status/verdict field actually
 supports that outcome.
 
 Each repair pass that commits a fix runs the implementation self-check before
-re-review and records it in the repair artifact. It fails closed: the checks
-the plan lists were run (command and exit code); every cited commit sha passes
+re-review and records it in the repair summary: a `gc.build.repair-summary.v1`
+artifact, `repair-summary-<apply-step-id>.md` in the artifact root, whose
+absolute path the loop's apply step records on the LOOP root (not this
+workflow root) as `gc.build.repair_summary_path`. Read it from there,
+`gc bd show "<loop-root-id>" --json | jq -r '(if type == "array" then .[0] else . end).metadata["gc.build.repair_summary_path"]'`,
+validate it from the launcher rig root with
+`python3 "$(gc formula list --json | python3 -c 'import json,os,sys; c=[os.path.join(os.path.dirname(p),"assets/scripts/validate_build_artifact.py") for p in json.load(sys.stdin)["search_paths"]]; print([p for p in c if os.path.isfile(p)][-1])')" --schema gc.build.repair-summary.v1 --path <that path>`
+(exit 0 and `{"ok": true}`; the file-to-id table is
+`assets/workflows/artifact-validation.md` in the pinned pack), and check that
+its `repair.commit` is the loop root's `gc.build.handoff_commit` and the commit
+the re-review reviewed. It fails closed: the checks the fix plan lists were run
+(command and exit code); every cited commit sha passes
 `git merge-base --is-ancestor <sha> HEAD`; summary metadata matches its own
 text; regenerated baselines/snapshots were opened and show the intended
-change; required gates (e.g. preflight) were run with exit codes recorded. A
-re-review that approved a pass without that record is missing evidence: treat
-its verdict as `changes_required` for the next attempt and say so in the
-journal.
+change; required gates (e.g. preflight) were run with exit codes recorded.
+
+**When `gc.build.repair_summary_path` is absent on the loop root** (a loop
+launched from a pack pinned before 2026-10-11, or a pass that skipped the
+file), the record never costs a loop (gc-0d4124: after re-review gcas-epwqw8
+had approved commit 8117d8a15 with CI green, decide-repair gcas-2hiz8a
+launched evidence-only loop gcas-oopady, about an hour of factory time, only
+to produce this record). If the most recent re-review's own `status` is
+`approved`, reconstruct the record yourself and approve:
+
+1. Find the apply step bead: `gc bd dep list "<loop-root-id>" --direction=up --json`
+   lists the loop's step beads; take the one whose `metadata."gc.step_id"`
+   ends in `apply-fixes`, with `gc.outcome=pass` and `gc.work_commit` equal to
+   the loop root's `gc.build.handoff_commit`. Its `close_reason` is where the
+   proofs went (`V1..Vn` with their results, the commit, the pull request, the
+   pr-ci-green `PASS` line); `gc.build.ci_gate_result` on the loop root is the
+   gate's own record; the re-review report's `## Verification` holds the
+   reviewer's runs with commands and exit codes.
+2. Write `{{artifact_root}}/repair-summary-<apply-step-id>.md` as a
+   `gc.build.repair-summary.v1` artifact in the shape `apply-fixes` in
+   `fix-loop-base` prescribes, with `producer.stage: decide-repair`,
+   `producer.attempt: 1`, `status: fixed`, `repair.commit` = the handoff
+   commit, coverage = one `covered` row per finding the re-review resolved
+   (any it left open is `blocked` with the re-review's words as rationale),
+   and a `## Self-Check` row per proof copied from those sources as recorded.
+   Name the source after each row; never invent a command or an exit code no
+   source states.
+3. Validate it with the command line above, then record it on the loop root:
+   `gc bd update "<loop-root-id>" --set-metadata "gc.build.repair_summary_path=<absolute path>"`,
+   and note in the journal that decide-repair reconstructed the record.
+
+Then continue below as for any approved re-review. An approved re-review
+never gets another loop only to produce this record. The one exception is
+missing evidence, not a missing file: when none of the three sources states a
+single check with its command and exit code, the approval rests on nothing you
+can cite; treat its verdict as `changes_required` for the next attempt and say
+so in the journal. A re-review that is NOT approved goes to **The next
+attempt** below as usual; its fix plan lists the missing record as one more
+item, and the next apply pass writes the file.
 
 Wording-only findings touch only prose (docs, reply drafts, reports, code
 comments) and change no code or test behaviour. Fix them in the same repair
@@ -92,7 +137,7 @@ A repair for an intermittent or timing failure must show the pre-fix code
 failing and the post-fix code passing under the same reproduction method. When
 the review is `blocked` for `cannot_reproduce`, or a repair pass cannot make
 the pre-fix code fail, do not guess-fix: record the evidence gathered in the
-repair artifact and the blocked outcome below (a reproduction method is the
+repair summary and the blocked outcome below (a reproduction method is the
 missing prerequisite), with `gc.restart.reason=cannot_reproduce`.
 
 **The next attempt.** When the most recent re-review's verdict is
