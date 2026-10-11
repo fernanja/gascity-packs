@@ -1091,6 +1091,12 @@ class FormulaAssetTests(unittest.TestCase):
             "dispatcher-recognized values",
             "`hard` (or leaving the field unset/empty)",
             "`transient` — retryable",
+            # gc-bd4wz: the dispatcher re-spawns a transient failure at once, so
+            # the worker waits out an unavailable local dependency (5 then 15
+            # minutes, re-checking) before closing, and the budget stays at 3.
+            "sleep 5 minutes\n  and re-check the exact condition",
+            "sleep\n  15 minutes and re-check once more",
+            "The\n  attempt budget stays at 3",
             "not recognized vocabulary",
             "the literal value must be `hard`",
         ):
