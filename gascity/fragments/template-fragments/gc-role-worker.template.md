@@ -304,6 +304,13 @@ anything single-lane behind it in the same drain, with no automatic
 recovery (2026-08-23, gcas-ddqmia: `make start` ran `docker compose up`
 with no `-d` and blocked a claim for 8h+ this way).
 
+Never scan the whole host: no `find /`, `grep -r /`, `du /` or any walk of
+`/` or `$HOME`, foreground or background. The host is shared; one
+whole-disk `find` left in a background shell ran 13 minutes at half a core
+while other sessions' browser tests aborted (gc-vcn5j). Scope every search
+to your worktree (`rg`, `find .`, `git grep`), or to one named directory
+outside it when you must.
+
 ## Git discipline
 
 If your work involves a git commit: a rig's checked-out `main` (or other
