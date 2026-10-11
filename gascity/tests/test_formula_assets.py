@@ -2553,19 +2553,46 @@ class FormulaAssetTests(unittest.TestCase):
                 ):
                     self.assertNotIn(stale, launch)
                 decide = rendered_step_text(root, formula, "decide-repair")
+                # gc-2n9i3, replacement loops (2026-10-11, gcas-cfi13w): the
+                # edge pointed at the closed first loop only, so the engine
+                # re-claimed decide-repair minutes after it launched attempt
+                # 2 and the new claim could only park (four waiting records
+                # in one night). The step now adds the same edge to the new
+                # root and releases its claim: not closed (the scope check,
+                # review-body and workflow-finalize are blocked on this one
+                # bead, and a closed bead is never readied again) and not
+                # parked (a wait-hold session keeps its pool slot).
+                edge = 'gc bd dep add "<claimed-step-id>" --blocked-by "<new-loop-root-id>"'
+                release = 'gc bd release-if-current "<claimed-step-id>" "<assignee>"'
                 for fragment in (
                     "Confirm with `gc bd show \"<loop-root-id>\"` that it is closed",
                     "Do not poll it",
-                    "gc session wait",
-                    "--on-beads \"<loop-root-id>\"",
                     "MOST RECENT re-review artifact's own verdict",
                     "**The next attempt.**",
                     "fewer than max_iterations",
                     "gc.failure_class=review_repair_exhausted",
                     '--var "push={{push}}" \\\n  --var "open_pr={{open_pr}}"',
+                    "BEFORE anything else, block this\nstep bead on it",
+                    edge,
+                    "## Handing this step back",
+                    "a closed bead is never readied again",
+                    release,
+                    "Do not close this step, do not park it with `gc session wait`",
+                    "Never\nrelease without the edge",
                     "never close this step while a\nloop it launched is still open",
                 ):
                     self.assertIn(fragment, decide)
+                # The edge lands before the release: a released step whose
+                # blockers are all closed is claimed again immediately.
+                self.assertLess(decide.index(edge), decide.index(release))
+                for stale in (
+                    'gc session wait "$SESSION_TARGET"',
+                    "--on-beads",
+                    "WAIT_NOTE",
+                    "Keep this step claimed",
+                    "park this session on the new loop root",
+                ):
+                    self.assertNotIn(stale, decide)
                 self.assertNotIn("gc hook", decide)
 
     def test_finalize_records_a_blocked_build_once(self) -> None:

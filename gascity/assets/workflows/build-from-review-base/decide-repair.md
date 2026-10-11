@@ -1,7 +1,8 @@
 This is the `build-from-review-base` decide-repair stage: it runs once the fix
 loop that `repair-review` launched has closed, reads the loop's final
 re-review, and records the repair outcome on the workflow root — approved,
-exhausted or blocked — or launches the next attempt.
+exhausted or blocked — or launches the next attempt and hands this step back
+to the queue, blocked on that loop, so a fresh claim decides when it ends.
 
 Read review_mode={{review_mode}}, interaction_mode={{interaction_mode}},
 review_fix_formula={{review_fix_formula}}, implementation_target={{implementation_target}},
@@ -13,7 +14,7 @@ Start with the repair-owner attempt journal,
 `{{artifact_root}}/repair-journal*.md` (`repair-journal.md`, or
 `repair-journal-attempt-<n>.md` per attempt), BEFORE the latest review or
 summary. It names every loop launched so far (root bead id, attempt number,
-launch time) and every wait already explained (gc-ndjvd). Resolve a relative
+launch time) and every wait or hand-back already explained (gc-ndjvd). Resolve a relative
 artifact root against the launcher rig root in `gc.work_dir`. Then read the
 workflow root.
 
@@ -26,26 +27,17 @@ recorded) closes it with `gc.outcome=fail`. Do not launch anything.
 Otherwise `gc.build.fix_loop_root_id` names the loop this step was blocked on.
 Confirm with `gc bd show "<loop-root-id>"` that it is closed. The engine
 makes this step ready only when every bead it depends on is closed, so an
-open loop root here means the dependency was never added or was removed, or
-this step was dispatched by hand. Do not poll it. Park this session on the
-loop durably and stop working:
-
-```bash
-SESSION_TARGET="${GC_SESSION_ID:-${GC_SESSION_NAME:-}}"
-WAIT_NOTE="decide-repair <claimed-step-id>: fix loop <loop-root-id> closed; re-read {{artifact_root}}/repair-journal.md and decide the repair outcome."
-if [ -n "$SESSION_TARGET" ] && ! gc wait list --session "$SESSION_TARGET" | grep -Fq "$WAIT_NOTE"; then
-  gc session wait "$SESSION_TARGET" \
-    --sleep \
-    --on-beads "<loop-root-id>" \
-    --note "$WAIT_NOTE"
-fi
-```
-
-The controller drains the session to sleep and wakes it with that note when
-the loop root closes; the woken session starts again from the journal. Note
-the wait in the journal. A loop root's own `gc.outcome=pass` means only that
-the loop ran to its end; the verdict is in the re-review artifact, as the
-next paragraph requires.
+open loop root here means the `blocks` edge from this step bead to that root
+was never added or was removed, or this step was dispatched by hand.
+Do not poll it, and do not park this session on it: a session asleep under
+`gc session wait --sleep` keeps its run-operator pool slot for as long as it
+sleeps, which is the slot another build needs (gc-2n9i3: four waiting
+records in one night on gcas-2hiz8a, each a fresh claim that could only
+park). Add the missing edge and hand the step back exactly as **Handing this
+step back** below describes, then stop working on it; the step is claimed
+again only once that loop has closed. A loop root's own `gc.outcome=pass`
+means only that the loop ran to its end; the verdict is in the re-review
+artifact, as the next paragraph requires.
 
 The exit reason is whichever of the three happened (approved, blocked or
 exhausted), determined by re-reading the
@@ -165,16 +157,30 @@ gc sling "<routed-to>" {{review_fix_formula}} --formula \
   --var "open_pr={{open_pr}}"
 ```
 
-Immediately record the new root id as `gc.build.fix_loop_root_id` (replacing
-the closed loop's), keep `gc.build.repair_status=running`, append the attempt
-to the journal, and then park this session on the new loop root with the
-`gc session wait --sleep --on-beads` block above (a new note naming the new
-root). Keep this step claimed; the session sleeps, and the controller wakes
-it with the note when that loop closes. Nothing in this step polls a loop:
-a claimed step that only waits holds a run-operator slot another build needs
-(gc-2n9i3). When the ceiling is reached without an approved re-review, the
-outcome is `exhausted` below; the same attempt that is approved is
-`approved`, whatever the counter says.
+The moment the sling prints the new root id, BEFORE anything else, block this
+step bead on it:
+
+```bash
+gc bd dep add "<claimed-step-id>" --blocked-by "<new-loop-root-id>"
+```
+
+and confirm with `gc bd dep list "<claimed-step-id>"` that the new root is
+listed `via blocks`. This is the same edge `repair-review` adds for the first
+loop, and it is the only thing that keeps this step from being claimed again
+while the replacement loop runs: the edge this step was blocked on points at
+the closed first loop, and a step whose every blocker is closed is ready the
+moment its claim is released (gc-2n9i3, attempt 2 of gcas-cfi13w on
+2026-10-11: the step had no edge to gcas-oopady, was claimed again within
+minutes, and the new claim could only park). Then record the new root id as
+`gc.build.fix_loop_root_id` on the workflow root (replacing the closed
+loop's), keep `gc.build.repair_status=running`, append the attempt to the
+journal (attempt number, loop root id, launch time, and this step bead's id
+as the bead blocked on it), and hand this step back as **Handing this step
+back** below describes. Do not close this step, do not park it with `gc session wait`,
+and do not poll the loop: a claimed step that only waits holds a run-operator
+slot another build needs (gc-2n9i3). When the ceiling is reached without an
+approved re-review, the outcome is `exhausted` below; the same attempt that
+is approved is `approved`, whatever the counter says.
 
 Record every attempt on the workflow root metadata and in artifacts. Every
 time you write `gc.build.repair_status`, also refresh `gc.build.review_verdict`,
@@ -232,6 +238,37 @@ failures.
 
 Do not close the workflow root with `gc.outcome=pass` from this stage.
 
+## Handing this step back
+
+A replacement loop is the one case where this step ends a claim without
+closing its bead. The bead stays this build's `decide-repair` step: the
+`decide-repair-scope-check` bead, `review-body` and `workflow-finalize` are
+all blocked on it, so closing it now would run the scope check and finalize
+while the loop is still open (a `running` repair status at finalize is read
+as blocked), and a closed bead is never readied again. Instead the claim is
+released: the bead goes back to `open` with its `blocks` edge on the new
+loop root, the engine readies it only when that root closes, and a
+run-operator claims it fresh and starts from the journal. In this order, with
+the edge already in place (above):
+
+```bash
+gc bd update "<claimed-step-id>" \
+  --set-metadata "gc.session_affinity=" --set-metadata "gc.continuation_group="
+gc bd release-if-current "<claimed-step-id>" "<assignee>"
+```
+
+`<assignee>` is the bead's current assignee exactly as
+`gc bd show "<claimed-step-id>" --json` prints it (your session's claim
+identity). The release is compare-and-swap, the same reset the engine applies
+when a session hands back a claim: it prints `released` when the bead was
+still yours and in progress, and `skipped` when it was not — then stop and
+report, never force the status by hand. Confirm with
+`gc bd show "<claimed-step-id>"` that the status is `open` with no assignee,
+note the hand-back in the journal, and continue with your role's claim
+protocol; the next claim does not return this bead, it is blocked. Never
+release without the edge: a released step whose blockers are all closed is
+claimed again immediately.
+
 ## Closing this step
 
 Every stop this step records on the workflow root (`exhausted` or `blocked`)
@@ -253,4 +290,5 @@ A bead closed with no `gc.outcome` does not fail the build by itself: finalize
 and publish then decide from the workflow root metadata alone. Never rely on
 that for a blocked or exhausted result, and never close this step while a
 loop it launched is still open: a `running` repair status at finalize is
-read as blocked.
+read as blocked. A step that launched a replacement loop is handed back, not
+closed (**Handing this step back** above).
