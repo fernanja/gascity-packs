@@ -67,7 +67,20 @@ diagnosis:
   dependency, work that depends on something not yet merged, a design
   decision only a human can make. If your own diagnosis says "a retry will
   reach the identical conclusion," that is `hard`, not any other word.
-- `transient` — retryable. The dispatcher spawns another attempt.
+- `transient` — retryable. The dispatcher spawns another attempt at once:
+  there is no wait between attempts, so three attempts closed `transient`
+  inside one outage of a local dependency spend the whole budget on it
+  (gc-bd4wz: Docker was down for 8 minutes; three implement attempts closed
+  `transient` within 4 minutes, and the stack was back 88 seconds after the
+  third). The wait is yours, before you close. When the cause is an
+  unavailable local dependency (Docker or the compose stack, the bead store
+  or Dolt, a database the tests need, a package registry), sleep 5 minutes
+  and re-check the exact condition (`docker info`, `gc bd show
+  "$CLAIMED_BEAD_ID"`, the command that failed); if it is still down, sleep
+  15 minutes and re-check once more. When it is back, continue the work in
+  this attempt. Close `transient` only after both re-checks still fail,
+  naming the dependency and the two re-check times in the reason. The
+  attempt budget stays at 3; each attempt now outlasts a 20-minute outage.
 
 Any other string (`structural`, `blocked-prerequisite`, `permanent`, or
 anything else that reads like a reasonable English description of a hard
