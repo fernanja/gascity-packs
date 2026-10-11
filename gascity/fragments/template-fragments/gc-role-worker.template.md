@@ -295,10 +295,25 @@ them, and their next commit silently lands on YOUR branch — no git command
 errors at any step (2026-09-16, real incident: two workers cross-contaminated
 branches in one tree exactly this way).
 
+This section is for implementation workers, in the tree their step handed
+them. It is not a rule for run-operators (gc-faqkn, 2026-10-05: an operator
+hard-failed a prepare-worktree step over 15 leftover files in a slot, and
+the work item burned its three implement attempts with no worktree). An
+operator runs `git fetch` and `git worktree add` from trees it does not own,
+the rig root or a slot; neither moves that tree's HEAD or writes its files,
+so a dirty shared root never stops an operator. The operator notes what it
+found (the path and the `git status --short` count) in its journal or step
+summary and continues; it never fails the step for it and never cleans it up.
+
+For implementation workers:
+
 - Immediately before your FIRST branch-mutating git command, run
   `git status --short` and `git branch --show-current`. Unexpected dirty
-  state or an unexpected checked-out branch means another agent may be live
-  in this tree: STOP and mail the mayor instead of proceeding.
+  state or an unexpected checked-out branch in a tree you share means
+  another agent may be live in it: STOP and mail the mayor instead of
+  proceeding. Leftovers in a tree that is yours alone (the per-item worktree
+  prepare-worktree made for you, your own slot) are not that: stage only
+  what you changed, by path, and carry on.
 - In any repo you did not just clone or worktree-add yourself, prefer
   `git worktree add <path> -b <branch> <base>` over `git checkout -b` —
   worktree add does not move the shared HEAD.
