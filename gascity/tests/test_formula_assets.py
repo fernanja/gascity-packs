@@ -365,6 +365,9 @@ BOUNDED_CI_WAIT_PERL = (
     "alarm $t; waitpid $p,0; exit($? & 127 ? 128+($? & 127) : $?>>8)"
 )
 BOUNDED_CI_WAIT_COMMAND = f"`perl -e '{BOUNDED_CI_WAIT_PERL}' 1500 gh pr checks <number> --watch --interval 30`"
+# The fix loop watches the exact run for the pushed head instead of polling
+# every check on the pull request (gc-3mkjc), under the same wrapper.
+BOUNDED_RUN_WAIT_COMMAND = f"`perl -e '{BOUNDED_CI_WAIT_PERL}' 1500 gh run watch <run-id> --exit-status`"
 HARD_FAILURE_CLOSE_COMMAND = (
     '`gc bd update "<claimed-step-id>" --set-metadata gc.outcome=fail --set-metadata gc.failure_class=hard '
     '--set-metadata "gc.failure_reason='
@@ -2713,11 +2716,12 @@ class FormulaAssetTests(unittest.TestCase):
                     self.assertEqual(formula["vars"][var_name]["default"], "false")
                 # Compare on one line: these paragraphs are re-wrapped per doc.
                 text = " ".join((root / "assets" / "workflows" / doc).read_text(encoding="utf-8").split())
+                wait_command = BOUNDED_RUN_WAIT_COMMAND if formula_name == "fix-loop-base" else BOUNDED_CI_WAIT_COMMAND
                 for fragment in (
                     "gc-68exu",
                     "push {{push}} and open_pr {{open_pr}}",
                     # The wait is bounded, and a stuck check has a way out.
-                    BOUNDED_CI_WAIT_COMMAND,
+                    wait_command,
                     "the wrapper ends it after 25 minutes (status 124)",
                     "Any other status (128 or more: `gh` was ended by a signal) means the wait did not finish: run it again.",
                     "a bare `alarm` before `exec` does not stop `gh`",
