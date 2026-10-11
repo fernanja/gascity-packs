@@ -35,27 +35,37 @@ commit whose result is red or unknown:
    a **draft** against the default branch with the source bead id in the
    title. Leave a draft a draft: marking it ready belongs exclusively to the
    publish step.
-2. Wait for GitHub's checks on the pushed commit, with a bound:
-   `perl -e '$t=shift; $p=fork; exec @ARGV unless $p; $SIG{ALRM}=sub{kill "TERM",$p; exit 124}; alarm $t; waitpid $p,0; exit($? & 127 ? 128+($? & 127) : $?>>8)' 1500 gh pr checks <number> --watch --interval 30`.
+2. Wait for GitHub's checks on the pushed commit, on the exact run, with a
+   bound. Resolve the run ids for the head you pushed:
+   `gh run list --commit "$(git rev-parse HEAD)" --json databaseId,name,status --jq '.[] | "\(.databaseId) \(.name) \(.status)"'`
+   (nothing listed means CI has not registered yet: wait a minute and run it
+   again), then watch each run by id:
+   `perl -e '$t=shift; $p=fork; exec @ARGV unless $p; $SIG{ALRM}=sub{kill "TERM",$p; exit 124}; alarm $t; waitpid $p,0; exit($? & 127 ? 128+($? & 127) : $?>>8)' 1500 gh run watch <run-id> --exit-status`.
    This `perl` wrapper is the time limit that works on macOS and Linux alike
    (GNU `timeout` is not installed on macOS, and a bare `alarm` before `exec`
-   does not stop `gh`, which ignores that signal). The command returns by
-   itself when the checks finish (0: green, 1: a check failed) and the wrapper
-   ends it after 25 minutes (status 124), so it is not a blocking command of
-   the kind the shell rules forbid. Any other status (128 or more: `gh` was
-   ended by a signal) means the wait did not finish: run it again. If your shell tool allows less than that for one
-   call, pass a smaller number of seconds, or run it in the background and
-   wait for it to exit. Do not replace it with a fixed sleep or a long poll
-   interval: a fix worker once sat an hour past the end of a run that way. If it
-   says no checks are reported yet, CI has not registered; wait a minute and
-   run it again. When the wrapper ends the wait, run `gh pr checks <number>`
-   once and read what is unfinished. A check that is running gets another
-   bounded wait, three waits at most. A check that sat `queued` or `waiting`
-   through a whole wait is stuck: do not wait again, take the exit under "If
-   CI cannot be made green" below.
+   does not stop `gh`, which ignores that signal). `gh run watch` returns the
+   moment that run finishes (0: green, 1: a job failed), not at the next tick
+   of a 30-second poll over every check on the pull request, which is how a
+   fix worker once sat 25-30 minutes past the end of a run (gc-3mkjc); the
+   wrapper ends it after 25 minutes (status 124), so it is not a blocking
+   command of the kind the shell rules forbid. Any other status (128 or more:
+   `gh` was ended by a signal) means the wait did not finish: run it again.
+   If your shell tool allows less than that for one call, pass a smaller
+   number of seconds, or run it in the background and wait for it to exit. Do
+   not replace it with a fixed sleep or a long poll interval. When every run
+   for the head has finished, run `gh pr checks <number>` once, for statuses
+   from other apps and anything still unfinished. A check that is running
+   gets another bounded wait, three waits at most. A check that sat `queued`
+   or `waiting` through a whole wait is stuck: do not wait again, take the
+   exit under "If CI cannot be made green" below.
 3. A failed check is yours to fix, in this pass, when the branch under repair
-   broke it. Read the failed job's log (`gh run view <run-id> --log-failed`),
-   fix the cause, commit, push, and wait again. A failing test is fixed; it is
+   broke it. Read the failed job's log (`gh run view <run-id> --log-failed`)
+   and fix the cause. Before pushing, run the failed job's own command
+   locally and see it pass: the shard it ran (`npx vitest --shard=<n>/<m>`,
+   the matrix entry, the exact `make` target), copied from the job log, not
+   the whole suite; a push that was not run locally first sends the wait
+   around once more (gc-3mkjc: about an hour idle across two pushes). Then
+   commit, push, and wait again. A failing test is fixed; it is
    never skipped, quarantined or re-baselined away. A failure the base branch
    also has is different: when the same job of the same workflow is red on the
    base branch's own most recent run of it, at the same step, and the base
