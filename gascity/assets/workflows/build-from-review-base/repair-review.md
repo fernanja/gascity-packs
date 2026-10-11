@@ -69,7 +69,8 @@ happens, and `decide-repair` reads which:
 
 One fix loop runs at a time per workflow root. This step launches the first
 one and blocks `decide-repair` on it; `decide-repair` launches any later
-attempt the same way:
+attempt the same way, blocks its own step bead on the new root, and releases
+its claim instead of waiting:
 
 1. Before launching, read `gc.build.fix_loop_root_id` on the workflow root. If
    it names a bead that is still open or in_progress, adopt that loop: do not

@@ -102,7 +102,12 @@ default = "false"
 # standalone workflow, blocks `decide-repair` on that loop's root bead with a
 # native bd dependency (`gc bd dep add`), and closes, so no run-operator slot
 # is held while the loop runs. `decide-repair` becomes ready when the loop root
-# closes and records the repair outcome from the loop's final re-review.
+# closes and records the repair outcome from the loop's final re-review. When
+# `decide-repair` launches a replacement loop it adds the same edge to the new
+# root and releases its claim (`gc bd release-if-current`) instead of closing or
+# parking: the engine readies the same step bead again when that root closes.
+# No formula change is needed for that; its dependents (the scope check and
+# `review-body`) stay wired to the one `decide-repair` bead.
 [[steps]]
 id = "review-body"
 title = "Build review scope"
