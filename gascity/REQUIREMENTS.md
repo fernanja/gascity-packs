@@ -200,6 +200,7 @@ for formula checks. Base schemas are expected at stable paths:
 | `gc.build.decomposition.v1` | `gascity/schemas/build/decomposition.v1.yaml` |
 | `gc.build.implementation-summary.v1` | `gascity/schemas/build/implementation-summary.v1.yaml` |
 | `gc.build.review.v1` | `gascity/schemas/build/review.v1.yaml` |
+| `gc.build.repair-summary.v1` | `gascity/schemas/build/repair-summary.v1.yaml` |
 | `gc.build.final-report.v1` | `gascity/schemas/build/final-report.v1.yaml` |
 
 Derived packs may add stricter methodology-specific schemas or extension fields,

@@ -1,0 +1,48 @@
+# Repair-summary artifact schema (gc-0d4124, 2026-10-11). The fix loop's apply step asked
+# for a "fix summary" but named no file, schema or metadata key, so a repair pass recorded
+# its V1-V7 proofs only in the step's close reason; decide-repair, which requires the repair
+# self-check record before it approves, then launched a second, evidence-only fix loop after
+# an APPROVED re-review just to produce the record (gcas-cfi13w: loop gcas-oopady, about an
+# hour of factory time). This schema is that record: one file per apply-fixes step bead,
+# `repair-summary-<step-id>.md` in the build's artifact root, recorded on the fix-loop root
+# as gc.build.repair_summary_path. Shape: the shared validator's standard front matter
+# (workflow = the fix-loop root, producer = the apply-fixes step, or decide-repair when it
+# reconstructs the record from the step's close reason), `repair.commit`/`repair.branch` =
+# the handoff the step records as gc.build.handoff_commit/handoff_branch (`none` for a pass
+# blocked before a commit), `status` (fixed: a green commit was handed to re-review; blocked:
+# the pass closed as a hard failure), and `trace` (upstream = the findings report the loop
+# fixes with its finding ids; coverage = one entry per finding id, mirrored row for row in
+# the `## Coverage` table). Schema IDs are immutable once published; breaking changes
+# require gc.build.repair-summary.v2.
+schema_id: gc.build.repair-summary.v1
+artifact: repair-summary
+allowed_statuses:
+  - fixed
+  - blocked
+  - superseded
+required_front_matter:
+  - schema
+  - workflow.id
+  - workflow.formula
+  - methodology.pack
+  - methodology.name
+  - producer.formula
+  - producer.stage
+  - producer.attempt
+  - repair.commit
+  - repair.branch
+  - status
+  - trace
+coverage_statuses:
+  - covered
+  - not_applicable
+  - deferred
+  - blocked
+  - out_of_scope
+  - superseded
+required_sections:
+  - Repair
+  - Findings Addressed
+  - Coverage
+  - Self-Check
+  - Changed Files

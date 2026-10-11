@@ -3251,6 +3251,65 @@ class FormulaAssetTests(unittest.TestCase):
                 self.assertIn(f"`assets/workflows/{self.REVIEW_WORKTREE_CANONICAL_DOC}`", flat)
                 self.assertIn("re-resolve the head there", flat)
 
+    def test_fix_loop_apply_step_writes_the_repair_summary_that_decide_repair_reads(self) -> None:
+        # gc-0d4124: apply-fixes asked for a "fix summary" and named no file,
+        # schema or metadata key, while decide-repair required "the repair
+        # self-check record" before approving. After an APPROVED re-review
+        # (gcas-cfi13w: commit 8117d8a15, CI green) decide-repair launched a
+        # second, evidence-only loop (gcas-oopady) only to produce the record.
+        # The producer names the artifact, the key on the loop root and the
+        # validator line; the consumer reads that key and, when it is absent,
+        # reconstructs the record from the apply step's close reason instead
+        # of launching a loop.
+        root = pathlib.Path(__file__).resolve().parents[1]
+        schema_text = (root / "schemas" / "build" / "repair-summary.v1.yaml").read_text(encoding="utf-8")
+        self.assertIn("schema_id: gc.build.repair-summary.v1", schema_text)
+        sections = re.findall(r"^  - (.+)$", schema_text.split("required_sections:")[1], re.MULTILINE)
+        self.assertEqual(sections, ["Repair", "Findings Addressed", "Coverage", "Self-Check", "Changed Files"])
+
+        apply_fixes = (root / "assets/workflows/fix-loop-base/apply-fixes.md").read_text(encoding="utf-8")
+        for fragment in (
+            "`repair-summary-<claimed-step-id>.md` in the build's artifact root",
+            "the directory of `{{findings_path}}`",
+            "A close reason is\nnot the record; this file is.",
+            "schema: gc.build.repair-summary.v1",
+            "  id: <loop-root-id>\n  formula: fix-loop-base",
+            "repair:\n  commit: <git rev-parse HEAD after the last push, the value of gc.build.handoff_commit;",
+            "| id | status |\n| --- | --- |\n| F1 | covered |",
+            "| id | command | exit | result |",
+            f"{self.VALIDATOR_RESOLVER} --schema gc.build.repair-summary.v1 --path <absolute path of repair-summary-<claimed-step-id>.md>",
+            'gc bd update "<loop-root-id>" --set-metadata "gc.build.repair_summary_path=<absolute path of repair-summary-<claimed-step-id>.md>"',
+            ".metadata[\"gc.build.repair_summary_path\"]'`\nmust print the path.",
+            "Artifact validation: the controller gates this step with `../assets/scripts/checks/pr-ci-green.sh`",
+        ):
+            with self.subTest(asset="apply-fixes.md", fragment=fragment):
+                self.assertIn(fragment, apply_fixes)
+        # Every mention of the summary names the artifact; "fix summary" named nothing.
+        self.assertNotIn("in the fix summary", apply_fixes)
+        # The template's headings are the schema's required sections, in order.
+        positions = [apply_fixes.index(f"## {section}\n") for section in sections]
+        self.assertEqual(positions, sorted(positions))
+
+        for formula in ("build-from-plan", "build-from-review"):
+            decide = rendered_step_text(root, formula, "decide-repair")
+            with self.subTest(formula=formula, step="decide-repair"):
+                for fragment in (
+                    "records on the LOOP root (not this\nworkflow root) as `gc.build.repair_summary_path`",
+                    ".metadata[\"gc.build.repair_summary_path\"]'`",
+                    f"{self.VALIDATOR_RESOLVER} --schema gc.build.repair-summary.v1 --path <that path>",
+                    "**When `gc.build.repair_summary_path` is absent on the loop root**",
+                    "reconstruct the record yourself and approve",
+                    '`gc bd dep list "<loop-root-id>" --direction=up --json`',
+                    "Its `close_reason` is where the\n   proofs went",
+                    "/repair-summary-<apply-step-id>.md` as a\n   `gc.build.repair-summary.v1` artifact",
+                    '`gc bd update "<loop-root-id>" --set-metadata "gc.build.repair_summary_path=<absolute path>"`',
+                    "never gets another loop only to produce this record",
+                    "never invent a command or an exit code no\n   source states",
+                ):
+                    self.assertIn(fragment, decide)
+                self.assertNotIn("A re-review that approved a pass without that record is missing evidence", decide)
+                self.assertNotIn("repair artifact", decide)
+
     def test_repair_review_and_publish_do_not_depend_on_a_reaped_worktree(self) -> None:
         root = pathlib.Path(__file__).resolve().parents[1]
         for formula in ("build-from-plan", "build-from-review"):
@@ -5724,7 +5783,7 @@ description = "Override sink that writes the base triage report contract."
         for path in sorted((root / "schemas" / "build").glob("*.yaml")):
             (schema_id,) = re.findall(r"^schema_id: (\S+)$", path.read_text(encoding="utf-8"), re.MULTILINE)
             schema_ids.add(schema_id)
-        self.assertEqual(len(schema_ids), 7)
+        self.assertEqual(len(schema_ids), 8)
 
         table = (root / "assets" / "workflows" / "artifact-validation.md").read_text(encoding="utf-8")
         tabled = set(re.findall(r"\| `(gc\.build\.[a-z_-]+\.v\d+)` \|", table))
@@ -5750,7 +5809,7 @@ description = "Override sink that writes the base triage report contract."
                 self.assertIn(f"The schema id of this artifact is `{schema}` (never the file name)", line)
                 self.assertIn(f"`{self.VALIDATOR_RESOLVER} --schema {schema} --path <artifact file>`", line)
                 self.assertIn("`assets/workflows/artifact-validation.md`", line)
-        self.assertEqual(paragraphs, 30)
+        self.assertEqual(paragraphs, 31)
 
         # Consumers: finalize and the prepare-* gates read several artifacts,
         # so they carry the table itself, identical everywhere.

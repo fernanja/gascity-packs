@@ -40,6 +40,7 @@ the file name, and the full table with the command is
 | `decomposition.md` | `gc.build.decomposition.v1` |
 | `task-<bead-id>-summary.md`, `implementation-summary.md` | `gc.build.implementation-summary.v1` |
 | `review.md`, re-review reports | `gc.build.review.v1` |
+| `repair-summary-<step-id>.md` | `gc.build.repair-summary.v1` |
 | `final-report.md`, `factory-run.md` | `gc.build.final-report.v1` |
 
 ```bash
