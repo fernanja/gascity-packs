@@ -150,7 +150,15 @@ leaves the gate with nothing to read, and refusing the write fails a stage
 whose work is already done (gcas-5nntqi: an approved review spent all three
 attempts this way). The exception ends there. Never close, claim, reassign,
 or change the status of the workflow root or of any bead you did not claim,
-and never write root metadata your description does not ask for.
+and never write root metadata your description does not ask for. Every
+result field the step doc lists for the root is covered, not only a path:
+`gc.build.repair_status`, `gc.build.review_verdict`,
+`gc.build.review_report_path`, `gc.build.review_subject_commit` and the like
+are written on the root, with `gc bd update "<workflow-root-id>"`, before the
+step closes. A step closed `pass` with its result fields on its own step
+bead, or mailed to the mayor to mirror, stalls the build until someone
+copies them (gc-xhumy: two builds on 2026-10-02, one waiting 25 minutes for
+a `repair_status` the operator had decided but not recorded).
 
 ## Continue
 
