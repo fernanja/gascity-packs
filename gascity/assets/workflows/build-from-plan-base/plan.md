@@ -5,6 +5,17 @@ Produce or reuse the implementation plan using approved requirements from
 otherwise write the default implementation-plan artifact under
 `{{artifact_root}}`.
 
+Budget (gc-e1dl0). Plan writing is bounded: 45 minutes of wall-clock from
+the claim, or the equivalent in turns. A claim in the requirements tagged
+`[source]`, `[source, mayor-verified]` or `[verified]` was checked on
+`origin/main` by the mayor when the requirements were written: cite it and
+plan from it, do not re-derive it (one discovery turn re-verifying such
+claims took 2 hours, against 23 minutes for the whole previous plan). Read a
+file only to settle something the requirements leave open. When the budget
+is spent, write the plan with what you have, list each unverified assumption
+under a `## Unverified` heading with what would settle it, and close: a plan
+with named gaps is reviewable, a plan still in discovery is not.
+
 Trace consumer call paths. When the requirements or design source name a
 component or API that a page or other consumer will use (especially one an
 earlier or sibling part delivered), record the exact call path (design
