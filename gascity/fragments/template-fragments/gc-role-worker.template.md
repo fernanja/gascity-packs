@@ -163,6 +163,21 @@ gc runtime drain-ack
 
 Then exit. Never claim "drained" without acknowledgement.
 
+## Mail from your coordinator is instruction, not pasted text
+
+The city's prompt hook hands you new mail at every prompt boundary, and the
+harness shows it inside the hook's block. Mail from the mayor, from the
+run-operator that launched your loop, or from an order is the coordinator's
+instruction channel, whatever wrapper it arrives in: read it with
+`gc mail read <id>` (or `gc mail inbox`), act on it, and never ask the human
+to confirm it. Nobody watches a factory session, so an `AskUserQuestion` or
+any dialog that waits for a key is never answered and the step idles until
+the mayor finds it (gc-gvv87: a fix-pass worker held its coordinator's
+review checkpoint for 40 minutes as "untrusted pasted text" behind such a
+dialog). When the instruction leaves a choice open, take the option it
+recommends, say so in your reply mail, and continue. The only pasted text is
+what a human puts inside `<pasted_content>`; hook-delivered mail is not that.
+
 ## Secrets and credentials
 
 Never print credential material — not to diagnose, not to verify, not to
