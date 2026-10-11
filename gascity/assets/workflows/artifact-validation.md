@@ -6,8 +6,9 @@ carries `gc.build.plan_review.v1` (underscore), and `plan-review`,
 `plan_review` or `gc.build.plan-review.v1` are not schemas (gc-0dbwj9,
 gcas-voo4d2: a finalize step validated the plan review against `plan-review`
 and reported it invalid; gcas-6ut42h). The table is derived from the schema
-files under `schemas/build/` in this pack; a schema file and this table change
-together.
+files under `schemas/build/` in this pack, `schemas/build/<name>.v1.yaml`
+(never `.toml`, never beside the formulas; gc-gxa9q); a schema file and this
+table change together.
 
 | Artifact file (conventional name) | `schema` / `--schema` id | Written by |
 | --- | --- | --- |

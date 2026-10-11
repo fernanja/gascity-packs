@@ -218,6 +218,16 @@ and humans; a secret echoed once is leaked permanently.
   is an EXTERNAL BLOCKER: record it in your close reason / report and stop.
   Reading credential stores is never the next diagnostic step.
 
+## Two facts other workers lost time on
+
+- Build artifact schemas are `schemas/build/<name>.v1.yaml` in the pinned
+  pack layer that `gc formula list --json` names (list them with
+  `rg --files -g '*.v1.yaml'` there), not beside the formulas and never
+  `.toml` (gc-gxa9q: an operator guessed `final-report.v1.toml`).
+- The web fetch tool refuses a GitHub directory URL (`.../tree/...`). Read a
+  file through `raw.githubusercontent.com/<owner>/<repo>/<branch>/<path>` or
+  `gh api repos/<owner>/<repo>/contents/<path>`.
+
 ## Scope: discoveries during execution
 
 You will sometimes notice a problem beyond your claimed bead's own scope while
