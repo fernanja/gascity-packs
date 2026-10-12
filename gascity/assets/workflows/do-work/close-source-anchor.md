@@ -31,7 +31,17 @@ worktree to a durable location, since the worktree reaper can remove
   present at its recorded path and record it as-is (unchanged behavior).
 - If no current evidence path was resolved: write a fresh minimal summary
   directly at the validated durable destination (unchanged fallback, now
-  explicit that the destination is always durable).
+  explicit that the destination is always durable). That file is still a
+  `gc.build.implementation-summary.v1` artifact: YAML front matter with
+  `schema`, `workflow`, `methodology`, `producer`, `trace` and
+  `status: blocked` (the status the schema reserves for a stop), a coverage
+  row per requirement id marked `blocked`, and a body that says what stopped
+  the implementation and what remains. Validate it with the same gate the
+  implement step uses (`../assets/scripts/checks/build-artifact-valid.sh`
+  against `gc.implementation.summary_path`) before this step closes. Plain
+  prose at that path fails the review gate and finalize later
+  (gc-s95gvs: 2026-10-11, a "Blocked implementation handoff" note cost two
+  downstream rejections).
 
 Separately, verify the implementation commit is present in the worktree (see
 the squash-merge fallback below if it is not).

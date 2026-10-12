@@ -64,6 +64,15 @@ statuses: `covered`, `not_applicable`, `deferred`, `blocked`, `out_of_scope`,
 `superseded`; never `approved`. The required `##` sections are `Summary`,
 `Outcome`, `Artifacts`, `Remaining Risks`, in that order.
 
+Anything the report says about CI comes from the pinned gate, not from your
+own reading of GitHub: cite `gc.build.ci_gate_result` on the workflow root
+(written by `../assets/scripts/checks/pr-ci-green.sh`, which reads check runs
+and commit statuses in both shapes GitHub returns); if the key is absent, run
+that script once and cite its result. Never parse `statusCheckRollup` or the
+checks API by hand here: its entries mix `CheckRun` (a `conclusion`) and
+`StatusContext` (a `state`), and a hand-rolled check rejected the second shape
+and cost a retry (gc-rjjb1o: gcas-e8nvpe, PR #2744).
+
 Before closing this step, record the report path on the workflow root as
 `gc.build.final_report_path` (`gc bd update "<workflow-root-id>"
 --set-metadata "gc.build.final_report_path=<absolute path>"`), then run the

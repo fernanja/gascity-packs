@@ -187,7 +187,14 @@ time you write `gc.build.repair_status`, also refresh `gc.build.review_verdict`,
 `gc.build.review_report_path`, and `gc.build.review_subject_commit` on the
 workflow root to the MOST RECENT review/re-review artifact's own verdict,
 path, and reviewed commit — never leave the original (pre-repair) review
-step's verdict, path, or commit in place once a repair loop has run;
+step's verdict, path, or commit in place once a repair loop has run. The same
+rule covers EVERY other `gc.build.review_*` key the root carries (a review
+step may have mirrored its artifact's `unresolved_findings` or
+`drift_observations` there): in the same update, set each one from the most
+recent artifact, and delete any the artifact does not carry (`gc bd update
+<root> --unset-metadata <key>`, or set it to `[]`). Finalize reads the root
+as a whole; one stale key makes its inputs disagree (gc-1ncu9d: gcas-end74z,
+F-1 reported unresolved after the approving re-review);
 finalize and the publish step both read these directly and will trust a
 stale value over the true latest artifact. `gc.build.review_subject_commit`
 must be the commit that the MOST RECENT approving re-review actually
