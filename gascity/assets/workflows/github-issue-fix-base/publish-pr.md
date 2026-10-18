@@ -12,7 +12,11 @@ are compatible. If a matching marker belongs to another author, record
 checkpoints, so a branch head can carry no workflow run at all, and a pull
 request opened ready on such a head has zero check runs, its required contexts
 stay pending forever and its merge state stays BLOCKED
-(`fernanja/ascent_app#2786`). For both modes, open or update the pull request as
+(`fernanja/ascent_app#2786`). This gate applies only to a pull request this
+workflow owns: one it opened, or one it reuses under the protocol below. When
+`foreign_pr_exists` applies, skip this gate entirely and go to that protocol:
+never mark ready, never `--undo`, and never push commits onto someone else's
+pull request. For both modes, open or update the pull request as
 a **draft** first, then:
 
 1. Resolve the head sha the pull request points at (`gh pr view <number> --json headRefOid`)
@@ -21,7 +25,8 @@ a **draft** first, then:
    (subject AND body) has none of `[skip ci]`, `[ci skip]`, `[no ci]`,
    `[skip actions]`, `[actions skip]`. The pull request title and body carry none
    either (the repository squashes with them, so a tag would skip the default
-   branch's push workflows).
+   branch's push workflows); strip one you find with `gh pr edit <number>
+   --title/--body-file` before going on.
 3. At least one workflow run exists for that sha:
    `gh run list --commit <sha> --json databaseId,event,status,conclusion --limit 10`
    is not empty. When the head is tagged or has zero runs (and the repository
@@ -30,10 +35,13 @@ a **draft** first, then:
    `git commit --allow-empty -m "chore: run CI (<workflow-root-id>)"`, push it
    (the tree must not change: `git diff --quiet <sha> <tip>`), and use the new
    tip as the head. Never more than one such commit per publish; if the new tip
-   still shows no run after the wait, fail the step (`gc.failure_class=hard`).
+   still shows no run after the wait, fail the step: `gc.outcome=fail`,
+   `gc.failure_class=hard`, and a `gc.failure_reason` naming the head sha.
 4. Wait for CI on the head (`gh pr checks <number> --watch --interval 30`, time
    bounded), then judge it with the pinned gate script in manual mode:
-   `assets/scripts/checks/pr-ci-green.sh --repo <owner>/<repo> --pr <number> --commit <sha>`.
+   `{{pack_root}}/assets/scripts/checks/pr-ci-green.sh --repo <owner>/<repo> --pr <number> --commit <sha>`
+   (the pack root is the directory `gc formula list --json` lists for this
+   pack; never a path relative to the rig).
 5. Only when it printed `PASS` for the pull request's current head, and
    `pr_mode` is `ready`, run `gh pr ready <number>`. "No failures", "no checks
    reported" and a judge that was not run are not green. `pr_mode=draft` stops
