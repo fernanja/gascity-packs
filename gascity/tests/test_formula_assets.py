@@ -3398,7 +3398,7 @@ class FormulaAssetTests(unittest.TestCase):
     # has no include mechanism, see the preflight test above); this keeps the
     # copies identical and checks the rules that matter.
     LIVE_SUITE_START = "**Live-suite failures that are not findings (gc-aecuvz).**"
-    LIVE_SUITE_END = "for a timeout against the rig's own server."
+    LIVE_SUITE_END = "for a timeout or connection error against the rig's own server."
 
     def test_live_suite_failure_classification_stays_synchronized(self) -> None:
         root = pathlib.Path(__file__).resolve().parents[1]
@@ -3408,12 +3408,25 @@ class FormulaAssetTests(unittest.TestCase):
         block = self._flat(canonical[start:end])
         for fragment in (
             "git diff --name-only $(git merge-base origin/<base-branch> HEAD) HEAD",
-            "It blocks, as before: a required finding.",
+            "A touched module blocks, as before: a required finding.",
+            "`<base-branch>` is the PR's `baseRefName` when a PR exists",
+            "`git symbolic-ref --short refs/remotes/origin/HEAD`",
+            "merge-base against that base branch, not against the parent branch",
+            "its fixtures, helpers and page objects, global setup and teardown",
+            "generated clients, and every module the failing spec imports, directly or transitively",
+            "the module is TOUCHED",
+            "is a THIRD-PARTY origin: not `localhost`",
+            "When no URL or origin was recorded, the failure is NOT class 2",
+            "`make review-worktree SHA=<base sha> DIR=<path>`",
+            "built and served FROM that base worktree",
+            "never the branch's dev server",
+            "the SAME test fails on the base with the SAME assertion and error text",
+            "Record both error texts side by side.",
             "net::ERR_INTERNET_DISCONNECTED",
             "`ERR_NAME_NOT_RESOLVED`",
             "`ERR_CONNECTION_*`",
             "`ERR_NETWORK_CHANGED`",
-            "a timeout fetching a third-party origin",
+            "a timeout fetching that third-party origin",
             "cdnjs.cloudflare.com",
             "one immediate retry of that test passes",
             "`Permitted/environment` heading",
@@ -3423,12 +3436,28 @@ class FormulaAssetTests(unittest.TestCase):
             "`Pre-existing` heading",
             "The flake-log rule for a touched module is unchanged",
             "Never use classes 2 and 3 for a touched module",
+            "for a timeout or connection error against the rig's own server",
         ):
             with self.subTest(fragment=fragment):
                 self.assertIn(fragment, block)
+        first_sentence = self._flat(self.LIVE_SUITE_START)
+        last_sentence = self._flat(self.LIVE_SUITE_END)
         for formula in ("build-base", "build-from-review-base", "fix-loop-base", "review"):
             with self.subTest(formula=formula):
-                self.assertIn(block, self._flat(effective_formula_text(root, formula)))
+                text = self._flat(effective_formula_text(root, formula))
+                self.assertIn(block, text)
+                self.assertIn(first_sentence, text)
+                self.assertIn(last_sentence, text)
+        # A reflow inside one copy must be caught on the raw file text too:
+        # compare each step file's block verbatim, not whitespace-normalized.
+        raw = canonical[start:end]
+        for rel in (
+            "assets/workflows/build-base/review.md",
+            "assets/workflows/fix-loop-base/re-review.md",
+            "assets/workflows/review/write-report.md",
+        ):
+            with self.subTest(file=rel):
+                self.assertIn(raw, (root / rel).read_text(encoding="utf-8"))
 
     def test_repair_decision_and_fix_plan_skip_unblocking_live_suite_items(self) -> None:
         root = pathlib.Path(__file__).resolve().parents[1]
@@ -3439,7 +3468,9 @@ class FormulaAssetTests(unittest.TestCase):
             "Environment and pre-existing items are not findings (gc-aecuvz).",
             "`Permitted/environment` or `Pre-existing` headings",
             "do not make it `changes_required` and do not earn another loop",
-            "An item that lacks that evidence is an unresolved finding.",
+            "the same assertion and error text as on the branch",
+            "served from a base worktree, not the branch's dev server",
+            "An item that lacks that evidence is an unresolved finding: treat the verdict as `changes_required`.",
             "A failure in a module the branch changed is never reclassified here.",
         ):
             with self.subTest(step="decide-repair", fragment=fragment):

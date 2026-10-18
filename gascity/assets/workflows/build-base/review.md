@@ -29,31 +29,50 @@ procedure; see `build-from-review-base/review.md`.
 meets a live host, so classify each failing test before raising it, and record
 every command and exit code you use. Three classes:
 
-1. Touched module: the failing spec, or the code it exercises, is in
+1. Touched module: the failing spec, or anything it depends on, is in
    `git diff --name-only $(git merge-base origin/<base-branch> HEAD) HEAD`.
-   It blocks, as before: a required finding. The flake-log rule for a touched
-   module is unchanged (a one-off failure that does not reproduce on an
-   immediate retry is logged; one that reproduces is fixed in the build).
+   "Anything it depends on" is explicit: the spec file, its fixtures, helpers
+   and page objects, global setup and teardown, test and framework config,
+   generated clients, and every module the failing spec imports, directly or
+   transitively. If the branch changed any of them, the module is TOUCHED.
+   `<base-branch>` is the PR's `baseRefName` when a PR exists, else the rig's
+   default branch (`git symbolic-ref --short refs/remotes/origin/HEAD`, minus
+   the `origin/` prefix). On a stacked branch, merge-base against that base
+   branch, not against the parent branch. A touched module blocks, as before:
+   a required finding. The flake-log rule for a touched module is unchanged
+   (a one-off failure that does not reproduce on an immediate retry is
+   logged; one that reproduces is fixed in the build).
 2. Environment failure: ALL of these hold. The module is not touched by the
-   branch. The error is a Chromium network-stack code
+   branch. The collector recorded the failing request's URL or origin, and it
+   is a THIRD-PARTY origin: not `localhost`, not `127.0.0.1`, not the rig's
+   dev, API or e2e base-URL ports. The error is a Chromium network-stack code
    (`net::ERR_INTERNET_DISCONNECTED`, `ERR_NAME_NOT_RESOLVED`,
-   `ERR_CONNECTION_*`, `ERR_NETWORK_CHANGED`) or a timeout fetching a
-   third-party origin. After you confirm the host resolves
+   `ERR_CONNECTION_*`, `ERR_NETWORK_CHANGED`) or a timeout fetching that
+   third-party origin. When no URL or origin was recorded, the failure is NOT
+   class 2: it is class 1 or class 3. After you confirm the host resolves
    `cdnjs.cloudflare.com` (`python3 -c 'import socket; print(socket.gethostbyname("cdnjs.cloudflare.com"))'`),
    one immediate retry of that test passes. List it under a
    `Permitted/environment` heading in the Verification section (test id,
-   error code, retry command, retry exit code). It is not a finding and does
-   not change the verdict. If the retry fails too, it is class 3 or class 1.
+   error code, failing origin, retry command, retry exit code). It is not a
+   finding and does not change the verdict. If the retry fails too, it is
+   class 3 or class 1.
 3. Pre-existing: a reproducible failure in an untouched module that is not
-   class 2. Run the same test on a detached worktree of `origin/<base-branch>`.
-   When it fails there too, file one bead for it (`gc bd create`, with the test
-   id, the error, and both commands and exit codes) and list it under a
-   `Pre-existing` heading in the Verification section with the bead id. It is
-   not a finding against this branch. When it passes on the base branch, the
-   branch causes it: a required finding.
+   class 2. Run the same test on a detached worktree of `origin/<base-branch>`
+   (`make review-worktree SHA=<base sha> DIR=<path>`), with the application
+   under test built and served FROM that base worktree (`make dev` run in
+   that worktree, on its own ports, with the test pointed at them through
+   `E2E_BASE_URL` and `E2E_DJANGO_URL`), never the branch's dev server that
+   may still be running. Pre-existing means the SAME test fails on the base
+   with the SAME assertion and error text; a different failure on the base is
+   not a match. Record both error texts side by side. When it matches, file
+   one bead for it (`gc bd create`, with the test id, both error texts, and
+   both commands and exit codes) and list it under a `Pre-existing` heading
+   in the Verification section with the bead id. It is not a finding against
+   this branch. When it passes on the base branch, or fails there differently,
+   the branch causes it: a required finding.
 
 Never use classes 2 and 3 for a touched module, for a first failure you did
-not retry, or for a timeout against the rig's own server.
+not retry, or for a timeout or connection error against the rig's own server.
 
 Where to work (gc-mpaqx): in your own detached worktree of the commit under
 review, never in the implementation worktree. That worktree belongs to a

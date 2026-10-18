@@ -131,10 +131,13 @@ most recent re-review lists live-suite failures only under its
 `Permitted/environment` or `Pre-existing` headings (see "Live-suite failures
 that are not findings" in `review.md`), they do not make it `changes_required`
 and do not earn another loop. Check each listed item once: an environment item
-names its retry command with exit code 0; a pre-existing item names a bead id
-and the same test failing on the base branch. An item that lacks that evidence
-is an unresolved finding. A failure in a module the branch changed is never
-reclassified here.
+names its failing third-party origin and its retry command with exit code 0; a
+pre-existing item names a bead id and records the same test failing on the
+base branch with the same assertion and error text as on the branch (both
+texts side by side), served from a base worktree, not the branch's dev
+server. An item that lacks that evidence is an unresolved finding: treat the
+verdict as `changes_required`. A failure in a module the branch changed is
+never reclassified here.
 
 A repair for an intermittent or timing failure must show the pre-fix code
 failing and the post-fix code passing under the same reproduction method. When
