@@ -24,6 +24,18 @@ Launch inputs:
 - max_iterations: {{max_iterations}}
 - push: {{push}}
 - open_pr: {{open_pr}}
+
+Reviewer-first publishing (gc-gef2p8): the review loop runs on local commits and
+CI runs once. `implement` and any fix pass end with a commit recorded as
+`gc.build.handoff_commit` and one `[skip ci]` checkpoint push, and open no pull
+request. `review` works from that commit. `publish` runs only after `review`
+approved and `finalize` passed: it pushes the branch head without `[skip ci]`
+(an empty `chore: run CI` commit is acceptable), opens the pull request as a
+draft with the source bead id in the title, waits for every required check on
+the head sha, and marks it ready on green. On a red required check it records
+the failing check names as `gc.build.publish_ci_failures` and the build
+re-enters the fix loop for one more local round before publishing again; it
+never retries CI blind.
 """
 formula = "build-base"
 version = 1
@@ -105,11 +117,11 @@ description = "Maximum implementation/review fix attempts."
 default = "10"
 
 [vars.push]
-description = "Set true to allow final publish push after all checks pass."
+description = "Set true to allow the publish step to push the approved branch head without [skip ci] after review approves. Implementation and fix passes only make [skip ci] checkpoint pushes (reviewer-first, gc-gef2p8)."
 default = "false"
 
 [vars.open_pr]
-description = "Set true to allow final PR creation after all checks pass."
+description = "Set true to allow the publish step to open the pull request as a draft, wait for the required checks on the approved head, and mark it ready on green. CI runs once, here (reviewer-first, gc-gef2p8)."
 default = "false"
 
 [[steps]]
@@ -245,6 +257,10 @@ mode = "exec"
 path = "../assets/scripts/checks/build-artifact-valid.sh"
 timeout = "5m"
 
+# Reviewer-first (gc-gef2p8): this step pushes without `[skip ci]`, opens the
+# draft pull request, waits for the required checks and marks it ready on
+# green. A red required check records gc.build.publish_ci_failures and hands
+# the build back to the fix loop (see ../assets/workflows/build-base/publish.md).
 [[steps]]
 id = "publish"
 title = "Optionally publish build result"

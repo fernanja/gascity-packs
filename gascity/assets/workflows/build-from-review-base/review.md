@@ -20,27 +20,27 @@ findings. This stage records the review result; the following `repair-review`
 stage owns any selected review-fix loop, restart handoff, or blocked repair
 state.
 
-Start with the automated checks, before reading any code. Find the pull
-request for the work branch (`gh pr list --head <branch>`) and read its checks
-for the commit under review (`gh pr checks <number>`). If checks are still
-running, wait for them (`gh pr checks <number> --watch`) rather than reviewing
-a commit whose result is unknown. Every failed check on that commit is a
-required finding: name the job, the failing step and the decisive log lines,
-and return `changes_required` without spending the review on problems a
-machine has already reported (gc-68exu). Call a failure unrelated to the diff
-only with evidence: the same step failing on the default branch, or passing on
-a rerun of the same commit. If no pull request or no check run exists for the
-commit, say so in the report as missing evidence; do not treat silence as a
-pass.
+Review the local hand-off commit (reviewer-first, gc-gef2p8). CI does not run
+before this review: the implementation step hands you a commit, not a pull
+request, and CI runs once, on the commit you approve, in the publish step.
+Resolve the subject in this order and name the source in the report:
 
-When the workflow publishes (push and open_pr both `true`), the step that
-handed you this commit could not close until
-`../assets/scripts/checks/pr-ci-green.sh` saw complete, green checks on the
-pull request head. That does not replace the reading above: the head can move
-after the gate ran, and a gate that recorded `skipped` proves nothing. Review
-the commit at the pull request head. If your checkout is on a different
-commit, stop and say so in the report rather than reviewing one commit while
-CI vouches for another.
+1. `gc.build.handoff_commit` (with `gc.build.handoff_branch`) on this
+   workflow's root;
+2. when the root carries none, the hand-off recorded by the implementation
+   item(s) the implementation summary names (the same key on each item's
+   workflow root, or `gc.work_commit` on its source anchor);
+3. when no hand-off was recorded at all, the head of the work branch at the
+   launcher rig root (`git -C <rig-root> rev-parse <branch>`), and say in the
+   report that the hand-off was not recorded.
+
+Do not consult the pull request list or `gh pr checks`: there is no pull
+request yet, and its check list is not evidence at this stage. Your test
+evidence is the worker's preflight record in the implementation summary plus
+the runs you make yourself below. If a pull request for the branch already
+exists anyway, do not rely on it; review the hand-off commit all the same. If
+your checkout is on a different commit from the subject, stop and say so in
+the report rather than reviewing one commit while another is handed over.
 
 Where to work (gc-mpaqx). Run every command of this review in your own
 worktree, never in the implementation worktree and never in the launcher
@@ -48,31 +48,37 @@ checkout. The implementation worktree belongs to a work-item bead that is
 already closed, and the engine removes a closed bead's worktree under
 `$GC_CITY/.gc/worktrees/$GC_RIG/` once it is clean and no process is running
 in it, which is its state between two of your commands (two reviews lost their
-checkout mid-run). Never depend on it existing. From the launcher rig root,
-make a detached worktree of the commit under review in the scratch directory
-next to it, which that cleanup never looks at:
+checkout mid-run). Never depend on it existing. The hand-off commit is already
+in the rig repository, which every worktree shares, so no fetch is needed. From
+the launcher rig root, make a detached worktree of that commit in the scratch
+directory next to it, which that cleanup never looks at:
 
 ```bash
 WT="$GC_CITY/.gc/worktrees/$GC_RIG-scratch/review-<claimed-step-id>"
-git fetch origin <branch>
-git worktree add --detach "$WT" origin/<branch>
+git worktree add --detach "$WT" <handoff-commit>
 git -C "$WT" rev-parse HEAD
 ```
 
-The last command must print the pull request head
-(`gh pr view <number> --json headRefOid --jq .headRefOid`). With no pull
-request, leave out the fetch and use the local `<branch>` instead of
-`origin/<branch>`. If `$WT` is left over from an earlier attempt, reuse it.
-When the head moves, or after a merge of the default branch, bring the
-worktree to the new head (`git -C "$WT" fetch origin <branch>`, then
-`git -C "$WT" checkout --detach origin/<branch>`) and resolve the head there
-again. A fresh worktree has no installed dependencies: when a tool or module
+The last command must print the hand-off commit. If `$WT` is left over from an
+earlier attempt, reuse it. When the subject moves (a new hand-off after a fix
+pass), bring the worktree to it (`git -C "$WT" checkout --detach
+<new-handoff-commit>`) and resolve the head there again. A fresh worktree has
+no installed dependencies: when a tool or module
 is missing, install it the way the repo documents (its own install target, for
 example `make install`) and run again. A tool missing from a fresh worktree is
 not a defect in the change and is not a finding. Before closing this step,
 after the verdict and the reviewed commit are recorded, remove the worktree
 from the launcher rig root with `git worktree remove --force "$WT"`; nothing
 else cleans that directory.
+
+Probe behaviour from that worktree: start the application from it against the
+available seeded stack and exercise the changed behaviour in a browser, not
+only in tests. Then run, once each: the full browser suite on every configured
+device profile (phone and tablet profiles included), and the rig's real-server
+suites against the available seeded stack. These are the suites CI does not
+run or the worker did not, and the defects they find are the reason this
+review comes before CI. The repo's one-full-run rule holds: a second full run
+only after a failed first one, and only for the failure.
 
 A requirement the implementation summary marks deferred, not run, skipped or
 "left for a later stage" is a required finding unless the requirements

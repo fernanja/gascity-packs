@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Decide whether the commit being handed to review has green GitHub checks.
 
-Run by checks/pr-ci-green.sh. Two ways in:
+Run by checks/pr-ci-green.sh. In the reviewer-first flow (gc-gef2p8) gate mode
+defers CI to the publish step while no pull request exists; manual mode is how
+publish waits for the one CI run. Two ways in:
 
   gate mode    GC_BEAD_ID names the step being closed. The workflow root it
                belongs to says whether the workflow intends to publish
@@ -40,14 +42,25 @@ What green means, for the commit at the pull request head:
 - In gate mode the pull request must still be a draft. A ready, green,
   unreviewed pull request can be merged by a merge sweep before review; only
   the publish step marks it ready.
+- Reviewer-first deferral (gc-gef2p8). CI does not run before review: the
+  implementation step hands over a local commit, records it as
+  gc.build.handoff_commit on the workflow root and makes one `[skip ci]`
+  checkpoint push; the publish step opens the pull request and waits for the
+  one CI run. So in gate mode, when gc.build.handoff_commit is recorded on the
+  root, the workflow intends to publish and no pull request exists yet, the
+  gate says and records `reviewer-first: CI deferred to publish` and exits 0.
+  With no recorded hand-off and no pull request it still fails, telling the
+  worker to record it. A pull request that does exist is judged as above.
+  Manual mode is unchanged: the publish step uses it to wait for the checks.
 
 The script never waits for CI: the worker does that before closing its step,
 and this confirms the result in a few API calls, because the controller that
 runs step checks processes one control bead at a time.
 
-Exit 0: green, or an explicit `skipped: <reason>` (no publishing intent, no
-GitHub remote, gh missing, repository without CI). Every skip is written to
-stderr as well as stdout.
+Exit 0: green, an explicit `reviewer-first: CI deferred to publish`, or an
+explicit `skipped: <reason>` (no publishing intent, no GitHub remote, gh
+missing, repository without CI). Every skip is written to stderr as well as
+stdout.
 Exit 1: red, pending, no pull request, not a draft, head mismatch. Detail goes
 to stderr, which the dispatcher records in gc.attempt_log for the next attempt.
 No verdict (GitHub 5xx, rate limit, network, `gc bd show` failing, and, when
@@ -166,6 +179,10 @@ class NoVerdict(Exception):
 
 class Skip(Exception):
     """The gate does not apply; the reason is said on both streams, recorded, and the step passes."""
+
+
+class Deferred(Exception):
+    """Reviewer-first hand-off: CI is deferred to the publish step; the line is said, recorded, and the step passes."""
 
 
 def say(message: str) -> None:
@@ -907,6 +924,7 @@ def gate_mode(bead_id: str, state: dict[str, Any]) -> str:
     intent_note = f"push={push or 'unset'} open_pr={open_pr or 'unset'}"
 
     commit = root_meta.get("gc.build.handoff_commit", "").strip()
+    recorded_commit = commit
     branch = root_meta.get("gc.build.handoff_branch", "").strip()
     worktree = ""
     source_id = root_meta.get("gc.drain_member_id", "").strip() or root_meta.get("gc.input_convoy_id", "").strip()
@@ -925,7 +943,7 @@ def gate_mode(bead_id: str, state: dict[str, Any]) -> str:
         if head:
             if commit and not same_sha(commit, head):
                 remedy = (
-                    "Push the worktree head, wait for its checks, and record that commit"
+                    "Commit your work on the work branch, record the worktree head as the hand-off, and push it once with [skip ci]"
                     if may_push
                     else "Record the commit that is actually handed over"
                 )
@@ -951,7 +969,8 @@ def gate_mode(bead_id: str, state: dict[str, Any]) -> str:
     if intent and not commit:
         raise GateFailure(
             f"workflow root {root_id} intends to publish ({intent_note}) but no handoff commit is recorded. "
-            f"Push the work branch, open a draft pull request, wait for its checks, then record gc.build.handoff_commit and gc.build.handoff_branch on {root_id}"
+            f"Commit the work, then record gc.build.handoff_commit and gc.build.handoff_branch on {root_id} "
+            "(reviewer-first: CI runs once, at publish, after the reviewer approves)"
         )
 
     try:
@@ -964,9 +983,17 @@ def gate_mode(bead_id: str, state: dict[str, Any]) -> str:
             raise Skip(f"no publishing intent ({intent_note}) and no open pull request for {where} in {repo}")
         if nothing_to_publish(gh, repo, commit):
             raise Skip(f"nothing to publish: handoff commit {commit[:12]} is already on the default branch of {repo} ({intent_note})")
+        if recorded_commit:
+            # Reviewer-first: the hand-off is a local commit; the pull request
+            # and the one CI run belong to the publish step.
+            raise Deferred(
+                f"reviewer-first: CI deferred to publish (handoff commit {recorded_commit[:12]} on {branch or 'an unrecorded branch'}; "
+                f"no pull request yet; {intent_note})"
+            )
         raise GateFailure(
-            f"no open pull request for {where} in {repo}. Push the branch and open a draft pull request against the default branch "
-            "(gh pr create --draft), wait for its checks, then close the step again"
+            f"no handoff commit is recorded on {root_id} and no open pull request exists for {where} in {repo}. "
+            f"Record gc.build.handoff_commit and gc.build.handoff_branch on {root_id} (reviewer-first: no pull request is opened before review), "
+            "then close the step again"
         )
     head = str((pull.get("head") or {}).get("sha", ""))
     if not may_push and commit and head and not same_sha(head, commit):
@@ -1013,13 +1040,13 @@ def check_pull(
         )
     if commit and not same_sha(head, commit):
         remedy = (
-            "push the handoff commit, wait for its checks, and record the commit you pushed"
+            "push the handoff commit and wait for its checks, or record the commit you pushed"
             if may_push
             else "record the commit that is actually on the pull request"
         )
         raise GateFailure(
             f"head mismatch: {label} head is {head[:12]} but the commit handed to review is {commit[:12]}. "
-            f"Review must see the commit CI ran on: {remedy}"
+            f"The pull request must carry the commit that was handed over: {remedy}"
         )
     base_ref = str((pull.get("base") or {}).get("ref") or "")
     result = evaluate(gh, repo, head, label, base_ref=base_ref, may_push=may_push, notes=notes, pull=pull)
@@ -1096,6 +1123,10 @@ def main(argv: list[str] | None = None) -> int:
             result = gate_mode(bead_id, state)
             say(result)
             record_result(state.get("root_id", ""), " | ".join([result, *state.get("notes", [])]))
+    except Deferred as deferred:
+        say(str(deferred))
+        record_result(state.get("root_id", ""), str(deferred))
+        return 0
     except Skip as skip:
         say(f"skipped: {skip}")
         # Every skip is also said where a failure would be: a gate that did

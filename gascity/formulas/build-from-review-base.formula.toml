@@ -82,11 +82,11 @@ description = "Maximum implementation/review fix attempts."
 default = "10"
 
 [vars.push]
-description = "Set true to allow final publish push after all checks pass."
+description = "Set true to allow the publish step to push the approved branch head without [skip ci] after review approves. Implementation and fix passes only make [skip ci] checkpoint pushes (reviewer-first, gc-gef2p8)."
 default = "false"
 
 [vars.open_pr]
-description = "Set true to allow final PR creation after all checks pass."
+description = "Set true to allow the publish step to open the pull request as a draft, wait for the required checks on the approved head, and mark it ready on green. CI runs once, here (reviewer-first, gc-gef2p8)."
 default = "false"
 
 # Review scope (gc-2ua7i). `prepare-review`, `review`, `repair-review` and

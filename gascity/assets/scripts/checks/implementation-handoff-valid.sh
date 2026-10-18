@@ -3,7 +3,9 @@ set -euo pipefail
 
 # Implementation handoff gate: the step that ends implementation closes only
 # when (1) its summary artifact is valid and (2) the commit it hands to review
-# is the head of an open pull request with complete, green checks.
+# is recorded (reviewer-first, gc-gef2p8: CI is deferred to the publish step
+# while no pull request exists; a pull request that does exist must have
+# complete, green checks).
 #
 # A step carries one [steps.check] script, so this chains the two gates in
 # order, as preflight-evidence-valid.sh chains the artifact gate. Both read
@@ -11,7 +13,9 @@ set -euo pipefail
 # stderr for gc.attempt_log; the first failure stops the chain.
 #
 #   build-artifact-valid.sh  summary schema, coverage and coverage permits
-#   pr-ci-green.sh           CI-green handoff (gc-68exu); passes with an explicit
+#   pr-ci-green.sh           hand-off gate (gc-68exu, gc-gef2p8); passes with
+#                            "reviewer-first: CI deferred to publish" while no
+#                            pull request exists, or an explicit
 #                            "skipped: <reason>" when the workflow does not
 #                            publish or the remote is not GitHub
 

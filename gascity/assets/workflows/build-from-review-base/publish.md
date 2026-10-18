@@ -48,21 +48,32 @@ right commit without checking. Follow this protocol exactly:
 2. Resolve the actual remote state with `git ls-remote origin <branch>` --
    not a locally cached ref, not a "was pushed" flag from a previous
    publish attempt. Compare its commit to `gc.build.review_subject_commit`.
-3. If they already match, no push is needed; proceed straight to PR handling
-   (if `open_pr` is authorized).
-4. If they differ, fast-forward push `gc.build.review_subject_commit` to
-   `<branch>` on `origin`. If the push cannot be fast-forwarded (rejected,
-   diverged, or the local worktree doesn't have that commit), fail loudly:
-   do NOT open a PR, do NOT report `not_published`/`noop`, record
+3. If they already match and the commit's message carries no skip-CI tag
+   (`git log -1 --format=%B <sha>` has none of `[skip ci]`, `[ci skip]`,
+   `[no ci]`, `[skip actions]`, `[actions skip]`), no push is needed; proceed
+   straight to PR handling (if `open_pr` is authorized). A tagged commit
+   still needs the push in step 4: GitHub runs no CI for it.
+4. Otherwise fast-forward push `gc.build.review_subject_commit` to `<branch>`
+   on `origin`, **without a skip-CI tag** (reviewer-first, gc-gef2p8:
+   every earlier push of this branch was a `[skip ci]` checkpoint, and this is
+   the push that runs CI, once, on the commit the reviewer approved). When the
+   commit's own message carries a skip-CI tag, put an empty commit on top of
+   it first, in the scratch worktree below:
+   `git commit --allow-empty -m "chore: run CI"`, and push that. The tree of
+   the pushed tip must equal the approved commit's tree
+   (`git diff --quiet <approved> <tip>`). If the push cannot be fast-forwarded
+   (rejected, diverged, or the local worktree doesn't have that commit), fail
+   loudly: do NOT open a PR, do NOT report `not_published`/`noop`, record
    `gc.outcome=fail`, `gc.failure_class=hard`, and a reason naming both the
    approved sha and the actual remote sha. A stale-head PR pointing at the
    wrong commit is worse than a blocked publish step.
-5. Only after the remote branch tip is confirmed to equal
-   `gc.build.review_subject_commit` (whether by matching already or by a
-   push that just succeeded) may a PR be opened. Record the sha that is now
-   actually at the branch tip as `gc.build.publish_pushed_commit` on the
-   workflow root before closing -- this is the sha a PR title/body may
-   truthfully claim as published.
+5. Only after the remote branch tip is confirmed to be
+   `gc.build.review_subject_commit` or that commit plus the one empty
+   `chore: run CI` commit (whether by matching already or by a push that just
+   succeeded) may a PR be opened. Record the sha that is now actually at the
+   branch tip as `gc.build.publish_pushed_commit` on the workflow root before
+   closing -- this is the sha a PR title/body may truthfully claim as
+   published and the sha CI runs on.
 
 Where to push from (gc-mpaqx): never the implementation worktree. It belongs
 to a closed bead and the engine may already have removed it; the approved
@@ -72,26 +83,78 @@ detached worktree of `gc.build.review_subject_commit` at
 "Where to work" in `review.md` beside this file describes, push from there so
 the pre-push hooks test that commit, and remove it before closing this step.
 
-**The pull request usually exists already, as a draft (gc-68exu).** When the
-workflow publishes, the implementation stage opens the pull request as a draft
-so CI runs before review. So before opening anything, and only after steps 1-5
-above have confirmed the remote branch tip equals
-`gc.build.review_subject_commit`, look for it:
+**This step runs CI, once (reviewer-first, gc-gef2p8).** No pull request
+exists yet on a first publish: the implementation and fix passes made only
+`[skip ci]` checkpoint pushes and opened none. Only after steps 1-5 above have
+confirmed the remote branch tip, look for one:
 `gh pr list --head <branch> --state open --json number,isDraft,headRefOid,url`.
 
-- One open pull request: do not open a second. Confirm its `headRefOid` equals
-  `gc.build.review_subject_commit`; if it does not, fail exactly as step 4
-  describes, naming both shas. Bring its title (it must contain the source
-  bead id) and body up to date, then mark it ready for review:
-  `gh pr ready <number>`. Record its URL and the pushed sha the same way a
-  newly opened pull request is recorded.
-- No open pull request: open one, as before.
+- No open pull request: open one as a **draft** against the default branch,
+  with the source bead id in the title (the bead this build was dispatched
+  for) and the sanitized body from the final report:
+  `gh pr create --draft --base <default-branch> --head <branch> --title "<what changed> (<source-bead-id>)" --body-file <file>`.
+  Never open it ready: a merge sweep merges any clean non-draft pull request,
+  and it must not be merged before its checks are green.
+- One open pull request (a second publish, after a red check): do not open a
+  second. Confirm its `headRefOid` equals the tip you just pushed, bring its
+  title (it must contain the source bead id) and body up to date, and leave it
+  a draft.
 - More than one: fail closed and name them; do not guess which one carries
   the approved commit.
 - If `open_pr` is not authorized, or finalize recorded a blocked, failed or
-  repairable outcome, leave an existing draft exactly as it is: do not mark it
-  ready and do not close it. A draft is what keeps unapproved work from being
-  merged.
+  repairable outcome, open nothing and leave an existing draft exactly as it
+  is: do not mark it ready and do not close it. A draft is what keeps
+  unapproved work from being merged.
+
+Then wait for CI on the head sha, with a bound, and judge it with the pinned
+gate script in manual mode, which reads check runs and commit statuses in both
+shapes GitHub returns (never parse `statusCheckRollup` by hand):
+
+1. Wait: `perl -e '$t=shift; $p=fork; exec @ARGV unless $p; $SIG{ALRM}=sub{kill "TERM",$p; exit 124}; alarm $t; waitpid $p,0; exit($? & 127 ? 128+($? & 127) : $?>>8)' 1500 gh pr checks <number> --watch --interval 30`.
+   This `perl` wrapper is the time limit that works on macOS and Linux alike
+   (GNU `timeout` is not installed on macOS, and a bare `alarm` before `exec`
+   does not stop `gh`). It returns by itself when the checks finish (0: green,
+   1: a check failed) and ends after 25 minutes (status 124), so it is not a
+   blocking command of the kind the shell rules forbid. Status 128 or more
+   means `gh` was ended by a signal: run it again. "No checks reported" means
+   CI has not registered: wait a minute and run it again. A check that is
+   running after the wrapper ends gets another bounded wait, three waits at
+   most; a check that sat `queued` or `waiting` through a whole wait is stuck:
+   fail this step as a hard failure naming it, do not wait again.
+2. Judge: `"$(gc formula list --json | python3 -c 'import json,os,sys; c=[os.path.join(os.path.dirname(p),"assets/scripts/checks/pr-ci-green.sh") for p in json.load(sys.stdin)["search_paths"]]; print([p for p in c if os.path.isfile(p)][-1])')" --repo <owner>/<repo> --pr <number> --commit <gc.build.publish_pushed_commit>`.
+   Run from the launcher rig root. `PASS` means every required check on that
+   head is complete and green (a failure the base branch also has passes with a
+   `WARNING`; copy each `WARNING` line, with its URLs, into this step's close
+   reason). Anything else, with exit 1, is a red or unfinished check.
+3. On `PASS`: mark the pull request ready, `gh pr ready <number>`, record the
+   PR URL, the pushed sha and the `PASS` line on the workflow root and this
+   step, and close `gc.outcome=pass`.
+4. On a red required check, never retry CI blind (no `gh run rerun` of a
+   failed required check unless the log shows CI's own machinery died, and
+   then once, recording the run URL). Leave the PR a draft. Record the failing
+   check names with their URLs on the workflow root:
+   `gc bd update "<workflow-root-id>" --set-metadata "gc.build.publish_ci_failures=<name>: <url>; <name>: <url>" --set-metadata "gc.build.publish_status=ci_red"`.
+   Then hand the build back to the fix loop for one more LOCAL round: write a
+   findings report for the red checks (schema `gc.build.review.v1`, verdict
+   `changes_required`, one finding per failing check with the job, the failing
+   step and the decisive log lines from `gh run view <run-id> --log-failed`),
+   record it as `gc.build.review_report_path`, and launch the fix loop exactly
+   as `repair-review.md` step 2 shows, with this report as `findings_path`
+   and `max_iterations` reduced by the attempts already made. Record the new
+   loop root as `gc.build.fix_loop_root_id`, block THIS step on it
+   (`gc bd dep add "<claimed-step-id>" "<loop-root-id>"`, confirmed with
+   `gc bd dep list`), and release your claim with `gc bd release-if-current`
+   instead of closing, as `decide-repair.md` does for a replacement loop. The
+   engine readies this step again when the loop root closes. When it is
+   readied again, read the loop's final re-review: if it approved, record the
+   commit it reviewed as `gc.build.review_subject_commit` and
+   `gc.build.review_verdict=approved` as `decide-repair.md` prescribes, then
+   run this protocol again from step 1 (push without the skip tag, wait,
+   judge). If it did not approve or `max_iterations` is spent, fail: record
+   `gc.outcome=fail`, `gc.failure_class=hard`, `gc.build.publish_status=failed`
+   and `gc.build.publish_reason=ci_red_unresolved`, leave the PR a draft.
+   Publishing is the only step that runs CI, so a second red result after the
+   local round is a result to report, not a reason to loop again blind.
 
 **Report what the pre-push checks actually said (gc-4kgy1).** When a push runs
 the repo's pre-push hooks, keep their output and quote the decisive lines in

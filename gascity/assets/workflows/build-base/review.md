@@ -16,6 +16,15 @@ identical re-review of a different item did not). A failing run is a required
 fix, not missing evidence — findings must state what failed and where, not
 that proof is absent.
 
+Review the local hand-off commit (reviewer-first, gc-gef2p8): the subject is
+`gc.build.handoff_commit` on the workflow root, checked out in a detached
+scratch worktree of the rig repository (shared object store, no fetch). There is no pull request before the publish step, so its check list is
+not evidence. Probe the change in a browser from that worktree, then run once:
+the full browser suite on every configured device profile and the rig's
+real-server suites against the available seeded stack. Test evidence is these
+runs plus the worker's preflight record. Concrete formulas carry the full
+procedure; see `build-from-review-base/review.md`.
+
 Where to work (gc-mpaqx): in your own detached worktree of the commit under
 review, never in the implementation worktree. That worktree belongs to a
 closed bead and the engine can remove it between two of your commands, so

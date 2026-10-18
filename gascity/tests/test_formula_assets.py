@@ -346,8 +346,9 @@ BUILD_ARTIFACT_GATE_CHECK_OVERRIDES = {
     ("do-work-item", "implement-item"): ("../assets/scripts/checks/implementation-handoff-valid.sh", CI_GATE_CHECK_TIMEOUT),
 }
 
-# Steps that hand a commit to review close only on green GitHub checks
-# (gc-68exu): formula -> step -> (check script, step doc).
+# Steps that hand a commit to review close on a recorded local commit, with CI
+# deferred to publish (gc-68exu, reorganised by gc-gef2p8 as reviewer-first):
+# formula -> step -> (check script, step doc).
 CI_GREEN_HANDOFF_STEPS = {
     ("implementation-base", "implement"): ("implementation-handoff-valid.sh", "implementation-base/implement.md"),
     ("do-work", "implement"): ("implementation-handoff-valid.sh", "do-work/implement.md"),
@@ -356,7 +357,7 @@ CI_GREEN_HANDOFF_STEPS = {
         "implementation-item-base/implement-item.md",
     ),
     ("do-work-item", "implement-item"): ("implementation-handoff-valid.sh", "do-work-item/implement-item.md"),
-    ("fix-loop-base", "apply-fixes"): ("pr-ci-green.sh", "fix-loop-base/apply-fixes.md"),
+    ("fix-loop-base", "apply-fixes"): ("handoff-commit-ancestor.sh", "fix-loop-base/apply-fixes.md"),
 }
 # `gh` ignores SIGALRM, so the wrapper forks and terminates it (GNU timeout is
 # not installed on macOS).
@@ -375,6 +376,10 @@ HARD_FAILURE_CLOSE_COMMAND = (
 MANUAL_PR_CI_GREEN_COMMAND = (
     "GC_BEAD_ID=<claimed-step-id> "
     '"$(gc formula list --json | python3 -c \'import json,os,sys; c=[os.path.join(os.path.dirname(p),"assets/scripts/checks/pr-ci-green.sh") for p in json.load(sys.stdin)["search_paths"]]; print([p for p in c if os.path.isfile(p)][-1])\')"'
+)
+MANUAL_HANDOFF_ANCESTOR_COMMAND = (
+    "GC_BEAD_ID=<claimed-step-id> "
+    '"$(gc formula list --json | python3 -c \'import json,os,sys; c=[os.path.join(os.path.dirname(p),"assets/scripts/checks/handoff-commit-ancestor.sh") for p in json.load(sys.stdin)["search_paths"]]; print([p for p in c if os.path.isfile(p)][-1])\')"'
 )
 
 # One produce attempt plus two bounded schema-repair attempts per artifact stage.
@@ -2699,35 +2704,49 @@ class FormulaAssetTests(unittest.TestCase):
             with self.subTest(fragment=fragment):
                 self.assertIn(fragment, text)
 
-    def test_implementation_steps_open_only_a_draft_pr_and_never_mark_it_ready(self) -> None:
+    def test_implementation_steps_open_no_pr_and_make_one_skip_ci_checkpoint_push(self) -> None:
         # gc-5gm0d: a shared-drain implementation worker opened a ready
         # fernanja/ascent_app#2459 while build-from-plan's own
         # implement/review/repair-review/publish steps were all still open;
         # an automated merge sweep could have squash-merged it the moment CI
-        # went green, and only a human converting it to draft prevented that.
-        # gc-68exu then needed CI to run before review, which needs a pull
-        # request: the implementation step opens it as a DRAFT (the sweep
-        # skips drafts), and marking it ready stays with the publish step.
+        # went green. gc-68exu then opened a DRAFT before review so CI could
+        # run first. gc-gef2p8 (reviewer-first) reverses the order: on
+        # 2026-10-17 four pushes cost about 50 machine-minutes of CI and an
+        # hour of waiting, and the defects were found by the reviewer's own
+        # local runs. The implementation step now ends with a local commit, a
+        # recorded hand-off and one `[skip ci]` checkpoint push; it opens no
+        # pull request, so nothing can be merged before the publish step.
         root = pathlib.Path(__file__).resolve().parents[1]
         for formula in ("implementation-base", "do-work", "implementation-item-base", "do-work-item"):
             with self.subTest(formula=formula):
-                text = effective_formula_text(root, formula)
+                text = " ".join(effective_formula_text(root, formula).split())
                 for fragment in (
-                    "`gh pr create --draft --base <default-branch> --head <branch>",
-                    "with the source bead id in the title",
-                    "Never open it\n   non-draft and never mark it ready",
-                    "gc-5gm0d",
-                    "Marking it ready belongs exclusively to the publish step",
-                    "When push or open_pr is not `true`, do not open a pull request",
+                    "Hand off by local commit (reviewer-first, gc-gef2p8).",
+                    "CI does not run before review",
+                    "CI runs once, on the commit the reviewer approved, in the publish step",
+                    "this step ends with a commit, a recorded hand-off and one checkpoint push",
+                    "It does not open a pull request and it does not wait for CI",
+                    "carries the tag `[skip ci]`",
+                    "the branch's required checks stay pending, so nothing can merge it before the publish step",
+                    '`gc bd update "<workflow-root-id>" --set-metadata "gc.build.handoff_commit=$(git rev-parse HEAD)" '
+                    '--set-metadata "gc.build.handoff_branch=<work-branch>"`',
+                    "Make exactly one checkpoint push",
+                    "Do not run `gh pr create`: no pull request exists until the publish step opens one.",
+                    "`make preflight-fast` (or the rig's documented fast gate)",
+                    "A failing test is fixed; it is never skipped, quarantined or re-baselined away.",
+                    "Do not run the full browser suite or the real-server suites here",
+                    "When push or open_pr is not `true`, make no checkpoint push and open no pull request",
                 ):
                     self.assertIn(fragment, text)
-                # The only `gh pr ready` an implementation step is told about
-                # is the one that makes a ready pull request a draft again.
-                self.assertIn("`gh pr ready --undo <number>` makes", text)
-                self.assertEqual(text.count("gh pr ready"), text.count("gh pr ready --undo"))
+                # The step never opens, readies or waits on a pull request.
+                self.assertNotIn("gh pr create --draft", text)
+                self.assertNotIn("gh pr ready", text)
+                self.assertNotIn("gh pr checks", text)
+                self.assertNotIn("--watch", text)
+                self.assertNotIn("Hand off with " "green CI", text)  # the CI-first section is gone
                 self.assertNotIn("draft or otherwise", text)
 
-    def test_handoff_steps_are_gated_on_green_ci(self) -> None:
+    def test_handoff_steps_are_gated_on_a_recorded_local_commit(self) -> None:
         root = pathlib.Path(__file__).resolve().parents[1]
 
         for (formula_name, step_id), (script, doc) in CI_GREEN_HANDOFF_STEPS.items():
@@ -2741,57 +2760,52 @@ class FormulaAssetTests(unittest.TestCase):
                 )
                 for var_name in ("push", "open_pr"):
                     self.assertEqual(formula["vars"][var_name]["default"], "false")
+                self.assertIn("gc-gef2p8", formula["vars"]["push"]["description"])
                 # Compare on one line: these paragraphs are re-wrapped per doc.
                 text = " ".join((root / "assets" / "workflows" / doc).read_text(encoding="utf-8").split())
-                wait_command = BOUNDED_RUN_WAIT_COMMAND if formula_name == "fix-loop-base" else BOUNDED_CI_WAIT_COMMAND
+                fix_loop = formula_name == "fix-loop-base"
                 for fragment in (
-                    "gc-68exu",
+                    "gc-gef2p8",
                     "push {{push}} and open_pr {{open_pr}}",
-                    # The wait is bounded, and a stuck check has a way out.
-                    wait_command,
-                    "the wrapper ends it after 25 minutes (status 124)",
-                    "Any other status (128 or more: `gh` was ended by a signal) means the wait did not finish: run it again.",
-                    "a bare `alarm` before `exec` does not stop `gh`",
-                    "Do not replace it with a fixed sleep or a long poll interval",
-                    "A check that is running gets another bounded wait, three waits at most.",
-                    "is stuck: do not wait again",
-                    "you may rerun the failed job once (`gh run rerun <run-id> --failed`) and must record",
-                    "The gate does not tell a flake from a defect: a check that is still red is red.",
-                    MANUAL_PR_CI_GREEN_COMMAND,
-                    "../assets/scripts/checks/pr-ci-green.sh",
-                    "controller does not wait for CI.",
+                    # Reviewer-first: a local commit, a recorded hand-off, one
+                    # skip-ci checkpoint push, no pull request, no CI wait.
+                    "CI runs once, on the",
+                    "in the publish step",
+                    "`[skip ci]`",
+                    "gc.build.handoff_commit=$(git rev-parse HEAD)",
+                    "gc.build.handoff_branch=<",
+                    "git push origin",
+                    "fast-forward only",
+                    "never bypass them",
                     "skipped: no publishing intent",
-                    # The worker fixes what its branch broke, and never by
-                    # weakening a test.
+                    # The worker fixes what it broke, and never by weakening a
+                    # test.
                     "A failing test is fixed; it is never skipped, quarantined or re-baselined away.",
-                    # A failure the base branch also has is reported with the
-                    # evidence: not fixed on this branch, not ignored.
-                    "when the same job of the same workflow is red on the base branch's own most recent run of it, "
-                    "at the same step, and the base branch does not require that check, the gate lets it pass and "
-                    "prints a `WARNING` line naming both runs and the step",
-                    "A job that fails at a step where the base branch's job passed is yours",
-                    "A red check from another app (a deployment preview such as Vercel) that the base branch "
-                    "does not require passes with a `WARNING` as well",
-                    "Do not fix the base branch's failure on this branch, and do not pass over it in silence",
-                    "copy each `WARNING` line, with its URLs, into",
-                    "If the gate says the pull request has merge conflicts, merge the base branch into",
-                    "GitHub runs no pull request checks on a conflicted pull request",
-                    "The gate makes this call, not you: a red check that the base branch requires, "
-                    "that is green on the base branch, or that the base branch has never run, blocks.",
-                    # The honest exit when CI cannot be made green.
-                    "If CI cannot be made green:",
+                    # The honest exit when the local pass cannot be made green.
                     "do not weaken, skip or re-baseline a test",
                     HARD_FAILURE_CLOSE_COMMAND,
                     "`gc.failure_class=hard` ends the step at once",
                     "a failed outcome without it is handed back as a new attempt, up to three times",
-                    # A ready pull request fails the gate; infrastructure does
-                    # not count as an attempt.
-                    "marked ready instead of draft (`gh pr ready --undo <number>` makes it a draft again)",
-                    "GitHub or the bead store being unreachable is not an attempt",
+                    "is not an attempt",
+                    "`INFRA` rather than `FAIL`",
                 ):
                     self.assertIn(fragment, text, f"{doc} lost: {fragment}")
-                self.assertNotIn("that includes a test that was already failing before", text)
-                self.assertNotIn("alarm shift; exec @ARGV", text)
+                if fix_loop:
+                    self.assertIn(MANUAL_HANDOFF_ANCESTOR_COMMAND, text)
+                    self.assertIn("../assets/scripts/checks/handoff-commit-ancestor.sh", text)
+                    self.assertIn("is an ancestor of the branch head", text)
+                else:
+                    self.assertIn(MANUAL_PR_CI_GREEN_COMMAND, text)
+                    self.assertIn("../assets/scripts/checks/pr-ci-green.sh", text)
+                    self.assertIn("`reviewer-first: CI deferred to publish`", text)
+                # No CI wait of any kind before review: it moved to publish.
+                self.assertNotIn(BOUNDED_CI_WAIT_COMMAND, text)
+                self.assertNotIn(BOUNDED_RUN_WAIT_COMMAND, text)
+                self.assertNotIn("gh pr checks", text)
+                self.assertNotIn("gh run watch", text)
+                self.assertNotIn("gh pr create --draft", text)
+                self.assertNotIn("gh pr ready", text)
+                self.assertNotIn("pr-ci-green.sh` (CI, above)", text)
 
         # The wrapper really chains both gates, artifact first.
         wrapper = (root / "assets" / "scripts" / "checks" / "implementation-handoff-valid.sh").read_text(
@@ -2859,14 +2873,14 @@ class FormulaAssetTests(unittest.TestCase):
         steps = {step["id"]: step for step in fix_loop["steps"]}
         self.assertEqual(steps["re-review"]["needs"], ["apply-fixes"])
         self.assertEqual(
-            pathlib.PurePosixPath(steps["apply-fixes"]["check"]["check"]["path"]).name, "pr-ci-green.sh"
+            pathlib.PurePosixPath(steps["apply-fixes"]["check"]["check"]["path"]).name, "handoff-commit-ancestor.sh"
         )
 
         apply_fixes = (root / "assets/workflows/fix-loop-base/apply-fixes.md").read_text(encoding="utf-8")
         for fragment in (
-            "or whenever the branch under repair already has an open pull\nrequest",
+            "It opens no pull request and waits for no CI",
             '--set-metadata "gc.build.handoff_commit=$(git rev-parse HEAD)" --set-metadata "gc.build.handoff_branch=<branch>"',
-            "Leave a draft a draft: marking it ready belongs exclusively to the\n   publish step.",
+            "opening it, waiting for its checks and marking it ready belong\n   exclusively to the publish step.",
             "the re-review does not start",
             "run `git checkout --detach` in your own directory",
             # A worktree with someone else's uncommitted work ends the step in
@@ -2886,47 +2900,113 @@ class FormulaAssetTests(unittest.TestCase):
             with self.subTest(formula=formula_name, step="repair-review"):
                 self.assertIn('--var "push={{push}}" \\\n     --var "open_pr={{open_pr}}"', repair)
 
-        # Reviewers still read CI themselves and review the commit CI ran on.
+        # Reviewer-first (gc-gef2p8): reviewers review the local hand-off
+        # commit, not a pull request, and run what CI does not.
         for doc in ("build-from-review-base/review.md", "fix-loop-base/re-review.md"):
-            text = (root / "assets" / "workflows" / doc).read_text(encoding="utf-8")
+            text = " ".join((root / "assets" / "workflows" / doc).read_text(encoding="utf-8").split())
             with self.subTest(doc=doc):
-                self.assertIn("Start with the automated checks, before reading any code.", text)
-                self.assertIn("a gate that recorded `skipped` proves nothing", text)
-                self.assertIn("Review\nthe commit at the pull request head.", text)
+                self.assertIn("Review the local hand-off commit (reviewer-first, gc-gef2p8).", text)
+                self.assertIn("`gc.build.handoff_commit`", text)
+                self.assertIn("Do not consult the pull request list or `gh pr checks`", text)
+                self.assertIn("its check list is not evidence at this stage", text)
+                self.assertIn("full browser suite on every configured device profile", text)
+                self.assertIn("real-server suites", text)
+                self.assertIn("a second full run only after a failed first one", text)
+                self.assertNotIn("Start with the automated checks, before reading any code.", text)
+                self.assertNotIn("a gate that recorded `skipped` proves nothing", text)
+                self.assertNotIn("Review the commit at the pull request head.", text)
 
-    def test_publish_marks_the_existing_draft_ready_instead_of_opening_a_second_pr(self) -> None:
+    def test_publish_runs_ci_once_and_marks_the_draft_ready_on_green(self) -> None:
         root = pathlib.Path(__file__).resolve().parents[1]
         for formula_name in ("build-from-plan", "build-from-decompose", "build-from-review"):
-            text = rendered_step_text(root, formula_name, "publish")
+            raw = rendered_step_text(root, formula_name, "publish")
+            text = " ".join(raw.split())
             for fragment in (
                 # Every safety rule the publish step already had.
-                "Read `gc.build.review_subject_commit` on the workflow root. This is the\n   ONLY source of truth for the approved commit",
+                "Read `gc.build.review_subject_commit` on the workflow root. This is the ONLY source of truth for the approved commit",
                 "git ls-remote origin",
                 "fast-forward push `gc.build.review_subject_commit` to",
                 "do NOT open a PR, do NOT report `not_published`/`noop`",
                 "gc.build.publish_pushed_commit",
-                "never skip or bypass a hook to\nget the push through",
-                # The draft opened by the implementation stage.
-                "The pull request usually exists already, as a draft (gc-68exu).",
+                "never skip or bypass a hook to get the push through",
+                # BEHAVIOR-4: the one push that runs CI.
+                "**without a skip-CI tag** (reviewer-first, gc-gef2p8",
+                "`[skip ci]`, `[ci skip]`, `[no ci]`, `[skip actions]`, `[actions skip]`",
+                'put an empty commit on top of it first, in the scratch worktree below: `git commit --allow-empty -m "chore: run CI"`',
+                "`git diff --quiet <approved> <tip>`",
+                "**This step runs CI, once (reviewer-first, gc-gef2p8).**",
                 "`gh pr list --head <branch> --state open --json number,isDraft,headRefOid,url`",
-                "One open pull request: do not open a second.",
-                "Confirm its `headRefOid` equals\n  `gc.build.review_subject_commit`",
-                "`gh pr ready <number>`",
-                "No open pull request: open one, as before.",
+                "`gh pr create --draft --base <default-branch> --head <branch>",
+                '--title "<what changed> (<source-bead-id>)"',
+                "Never open it ready",
+                "One open pull request (a second publish, after a red check): do not open a second.",
                 "More than one: fail closed and name them",
-                "leave an existing draft exactly as it is: do not mark it\n  ready and do not close it",
+                "leave an existing draft exactly as it is: do not mark it ready and do not close it",
+                # The bounded wait and the pinned judge.
+                BOUNDED_CI_WAIT_COMMAND,
+                "a check that sat `queued` or `waiting` through a whole wait is stuck",
+                "assets/scripts/checks/pr-ci-green.sh",
+                "--repo <owner>/<repo> --pr <number> --commit <gc.build.publish_pushed_commit>",
+                "mark the pull request ready, `gh pr ready <number>`",
+                # A red required check: names recorded, one more local round.
+                "never retry CI blind",
+                "gc.build.publish_ci_failures=<name>: <url>",
+                "gc.build.publish_status=ci_red",
+                "hand the build back to the fix loop for one more LOCAL round",
+                "`gc bd dep add \"<claimed-step-id>\" \"<loop-root-id>\"`",
+                "`gc bd release-if-current`",
+                "ci_red_unresolved",
             ):
                 with self.subTest(formula=formula_name, fragment=fragment):
                     self.assertIn(fragment, text)
             self.assertLess(
-                text.index("Only after the remote branch tip is confirmed to equal"),
-                text.index("The pull request usually exists already, as a draft"),
+                text.index("Only after the remote branch tip is confirmed to be"),
+                text.index("**This step runs CI, once (reviewer-first, gc-gef2p8).**"),
             )
-        for doc in ("implement/publish.md", "build-basic/publish.md"):
-            text = (root / "assets" / "workflows" / doc).read_text(encoding="utf-8")
+            # Push first, then the pull request, then the wait, then ready.
+            self.assertLess(text.index("`gh pr create --draft"), text.index(BOUNDED_CI_WAIT_COMMAND))
+            self.assertLess(text.index(BOUNDED_CI_WAIT_COMMAND), text.index("mark the pull request ready, `gh pr ready <number>`"))
+        for doc in ("implement/publish.md", "build-basic/publish.md", "build-base/publish.md"):
+            text = " ".join((root / "assets" / "workflows" / doc).read_text(encoding="utf-8").split())
             with self.subTest(doc=doc):
-                self.assertIn("gc-68exu", text)
-                self.assertIn("`gh pr ready <number>`", text)
+                self.assertIn("gc-gef2p8", text)
+                no_skip_tag, no_blind_retry = {
+                    "implement/publish.md": ("WITHOUT the skip tag", "A red required check is reported, not retried"),
+                    "build-basic/publish.md": ("WITHOUT the skip tag", "never retry CI blind"),
+                    "build-base/publish.md": ("WITHOUT a skip-CI tag", "never retries CI blind"),
+                }[doc]
+                self.assertIn(no_skip_tag, text)
+                self.assertIn("gc.build.publish_ci_failures", text)
+                self.assertIn(no_blind_retry, text)
+                if doc != "build-base/publish.md":
+                    self.assertIn("`gh pr ready <number>`", text)
+        # The publish helper formula carries the same contract.
+        for doc, fragment in (
+            ("publish/preflight.md", "it is the only place CI runs"),
+            ("publish/push.md", "WITHOUT a `[skip ci]`"),
+            ("publish/open-pr.md", "open the PR as a draft"),
+        ):
+            with self.subTest(doc=doc):
+                text = " ".join((root / "assets" / "workflows" / doc).read_text(encoding="utf-8").split())
+                self.assertIn("Reviewer-first (gc-gef2p8)", text)
+                self.assertIn(fragment, text)
+        helper = " ".join((root / "assets" / "workflows" / "publish" / "open-pr.md").read_text(encoding="utf-8").split())
+        self.assertIn("`gc.build.publish_ci_failures`", helper)
+        self.assertIn("reason `ci_red`", helper)
+        # build-base declares the contract on the formula itself.
+        build_base = (root / "formulas" / "build-base.formula.toml").read_text(encoding="utf-8")
+        for fragment in (
+            "Reviewer-first publishing (gc-gef2p8)",
+            "`publish` runs only after `review`",
+            "approved and `finalize` passed",
+            "without `[skip ci]`",
+            "`gc.build.publish_ci_failures`",
+            "never retries CI blind",
+        ):
+            with self.subTest(build_base=fragment):
+                self.assertIn(" ".join(fragment.split()), " ".join(build_base.split()))
+        publish_step = {step["id"]: step for step in load_formula(root, "build-base")["steps"]}["publish"]
+        self.assertEqual(publish_step["needs"], ["finalize"])
 
     # gc-50j4j (R13 retro): build-from-plan and build-basic have no shared
     # plan/plan-review/decompose/repair file (each overrides its own), so the
@@ -3235,7 +3315,7 @@ class FormulaAssetTests(unittest.TestCase):
         for doc in (self.REVIEW_WORKTREE_CANONICAL_DOC, "fix-loop-base/re-review.md"):
             flat = " ".join((workflows / doc).read_text(encoding="utf-8").split())
             with self.subTest(doc=doc, kept="existing rules"):
-                self.assertIn("Review the commit at the pull request head.", flat)
+                self.assertIn("Review the local hand-off commit (reviewer-first, gc-gef2p8).", flat)
                 self.assertIn("record the exact command, the tally and the exit code in the report", flat)
                 self.assertIn("After a merge of the default branch into the work branch, run them again", flat)
 
@@ -3247,13 +3327,14 @@ class FormulaAssetTests(unittest.TestCase):
             # Why: what the engine does to a closed bead's worktree.
             "the engine removes a closed bead's worktree under\n`$GC_CITY/.gc/worktrees/$GC_RIG/`",
             # The commands.
+            # The hand-off commit is in the shared repository: no fetch.
             'WT="$GC_CITY/.gc/worktrees/$GC_RIG-scratch/review-<claimed-step-id>"\n'
-            "git fetch origin <branch>\n"
-            'git worktree add --detach "$WT" origin/<branch>\n'
+            'git worktree add --detach "$WT" <handoff-commit>\n'
             'git -C "$WT" rev-parse HEAD\n',
-            "must print the pull request head\n(`gh pr view <number> --json headRefOid --jq .headRefOid`)",
-            # Re-resolving the head there when it moves.
-            '`git -C "$WT" checkout --detach origin/<branch>`) and resolve the head there\nagain',
+            "The last command must print the hand-off commit.",
+            "which every worktree shares, so no fetch is needed",
+            # Re-resolving the head there when the subject moves.
+            '`git -C "$WT" checkout --detach\n<new-handoff-commit>`) and resolve the head there again',
             # A fresh worktree without dependencies is not a finding.
             "install it the way the repo documents (its own install target",
             "A tool missing from a fresh worktree is\nnot a defect in the change and is not a finding.",
@@ -3263,6 +3344,7 @@ class FormulaAssetTests(unittest.TestCase):
             with self.subTest(fragment=fragment):
                 self.assertIn(fragment, canonical)
         self.assertEqual(canonical.count("git worktree add"), 1)
+        self.assertNotIn("git fetch origin", canonical)
         for doc in (*self.REVIEW_WORKTREE_POINTER_DOCS, "build-from-review-base/publish.md"):
             text = (workflows / doc).read_text(encoding="utf-8")
             flat = " ".join(text.split())
@@ -3307,7 +3389,7 @@ class FormulaAssetTests(unittest.TestCase):
             f"{self.VALIDATOR_RESOLVER} --schema gc.build.repair-summary.v1 --path <absolute path of repair-summary-<claimed-step-id>.md>",
             'gc bd update "<loop-root-id>" --set-metadata "gc.build.repair_summary_path=<absolute path of repair-summary-<claimed-step-id>.md>"',
             ".metadata[\"gc.build.repair_summary_path\"]'`\nmust print the path.",
-            "Artifact validation: the controller gates this step with `../assets/scripts/checks/pr-ci-green.sh`",
+            "Artifact validation: the controller gates this step with `../assets/scripts/checks/handoff-commit-ancestor.sh`",
         ):
             with self.subTest(asset="apply-fixes.md", fragment=fragment):
                 self.assertIn(fragment, apply_fixes)
@@ -3351,7 +3433,8 @@ class FormulaAssetTests(unittest.TestCase):
                     repair,
                 )
                 self.assertIn("the commit that re-review's report names", repair)
-                self.assertIn("`gh pr view <number> --json headRefOid --jq .headRefOid`", repair)
+                self.assertIn("the loop root's `gc.build.handoff_commit`", repair)
+                self.assertNotIn("gh pr view", repair)
                 self.assertIn("Do not look for it with `git rev-parse HEAD` in a worktree", repair)
                 self.assertIn("both may be gone by now (gc-mpaqx)", repair)
                 self.assertIn("Never carry it forward from an earlier attempt or an unrelated continuation", repair)
@@ -3363,7 +3446,7 @@ class FormulaAssetTests(unittest.TestCase):
                 self.assertIn("push from there so the pre-push hooks test that commit", publish)
         # The re-review report is where repair-review reads the commit from.
         re_review = (root / "assets/workflows/fix-loop-base/re-review.md").read_text(encoding="utf-8")
-        self.assertIn("Name the commit you reviewed (`git rev-parse HEAD` there) in the\nreport.", re_review)
+        self.assertIn("Name the commit you reviewed (`git rev-parse HEAD` there) in the report.", " ".join(re_review.split()))
         # Fix workers were already kept in their own directory (38e1ab26) and
         # never told to use the implementation worktree; that stays as it is.
         apply_fixes = (root / "assets/workflows/fix-loop-base/apply-fixes.md").read_text(encoding="utf-8")
@@ -5772,6 +5855,7 @@ description = "Override sink that writes the base triage report contract."
                 "build-artifact-valid.sh",
                 "design-review-approved.sh",
                 "gap-analysis-approved.sh",
+                "handoff-commit-ancestor.sh",
                 "implementation-handoff-valid.sh",
                 "implementation-review-approved.sh",
                 "pr-ci-green.sh",

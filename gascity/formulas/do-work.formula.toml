@@ -30,11 +30,11 @@ description = "Optional per-item summary path."
 default = ""
 
 [vars.push]
-description = "Publishing intent inherited from the launching workflow. With open_pr, true means implementation ends with the branch pushed and a draft pull request whose checks are green."
+description = "Publishing intent inherited from the launching workflow. With open_pr, true means implementation ends with a local hand-off commit recorded as gc.build.handoff_commit and one [skip ci] checkpoint push. No pull request is opened and CI does not run until the publish step (reviewer-first, gc-gef2p8)."
 default = "false"
 
 [vars.open_pr]
-description = "Publishing intent inherited from the launching workflow. See push."
+description = "Publishing intent inherited from the launching workflow. See push: it opens no pull request before the publish step."
 default = "false"
 
 [[steps]]

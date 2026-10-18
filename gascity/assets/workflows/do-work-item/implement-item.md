@@ -22,98 +22,65 @@ rig root's checked-out branch to make validation pass locally. The only path
 from a worktree to `main` is a GitHub PR through the pack's normal publish
 step; nothing before that step may write to `main` directly, for any reason.
 
-Hand off with green CI (gc-68exu). This workflow was launched with push
-{{push}} and open_pr {{open_pr}}. When both are `true`, this step does not
-end at the commit. It ends when the commit is on GitHub, in a draft pull
-request, with every check green, so that review starts on a commit a machine
-has already passed:
+Hand off by local commit (reviewer-first, gc-gef2p8). This workflow was
+launched with push {{push}} and open_pr {{open_pr}}. CI does not run before
+review: the reviewer works from your local commit, in a scratch worktree of the
+same repository, and CI runs once, on the commit the reviewer approved, in the
+publish step. When both are `true`, this step ends with a commit, a recorded
+hand-off and one checkpoint push. It does not open a pull request and it does
+not wait for CI:
 
-1. Push the work branch to `origin`. Let the repo's pre-push hooks run; never
-   bypass them, and never push to the default branch.
-2. Open a pull request for the branch against the default branch as a
-   **draft**, with the source bead id in the title (the bead this build was
-   dispatched for; the requirements artifact and the work item name it):
-   `gh pr create --draft --base <default-branch> --head <branch> --title "<what changed> (<source-bead-id>)"`.
-   If the branch already has an open pull request, use that one. Never open it
-   non-draft and never mark it ready: a merge sweep merges any clean non-draft
-   pull request, and this one has not been reviewed (gc-5gm0d: an
-   implementation worker opened a ready pull request while review, repair and
-   publish were all still open, and only a human converting it to draft kept
-   it unmerged). Marking it ready belongs exclusively to the publish step,
-   after review and repair-review approve.
-3. Wait for GitHub's checks on that commit, with a bound:
-   `perl -e '$t=shift; $p=fork; exec @ARGV unless $p; $SIG{ALRM}=sub{kill "TERM",$p; exit 124}; alarm $t; waitpid $p,0; exit($? & 127 ? 128+($? & 127) : $?>>8)' 1500 gh pr checks <number> --watch --interval 30`.
-   This `perl` wrapper is the time limit that works on macOS and Linux alike
-   (GNU `timeout` is not installed on macOS, and a bare `alarm` before `exec`
-   does not stop `gh`, which ignores that signal). The command returns by
-   itself when the checks finish (0: green, 1: a check failed) and the wrapper
-   ends it after 25 minutes (status 124), so it is not a blocking command of
-   the kind the shell rules forbid. Any other status (128 or more: `gh` was
-   ended by a signal) means the wait did not finish: run it again. If your shell tool allows less than that for one
-   call, pass a smaller number of seconds, or run it in the background and
-   wait for it to exit. Do not replace it with a fixed sleep or a long poll
-   interval: a worker once sat an hour past the end of a run that way. If it
-   says no checks are reported yet, CI has not registered; wait a minute and
-   run it again. When the wrapper ends the wait, run `gh pr checks <number>`
-   once and read what is unfinished. A check that is running gets another
-   bounded wait, three waits at most. A check that sat `queued` or `waiting`
-   through a whole wait is stuck: do not wait again, take the exit under "If
-   CI cannot be made green" below.
-4. A failed check is yours to fix, before anyone reviews, when your branch
-   broke it. Read the failed job's log (`gh run view <run-id> --log-failed`),
-   fix the cause on the branch, commit, push, and wait again. A failing test
-   is fixed; it is never skipped, quarantined or re-baselined away. A failure
-   the base branch also has is different: when the same job of the same
-   workflow is red on the base branch's own most recent run of it, at the same
-   step, and the base branch does not require that check, the gate lets it
-   pass and prints a `WARNING` line naming both runs and the step. A job that
-   fails at a step where the base branch's job passed is yours, whatever else
-   is red on the base branch. A red check from another app (a deployment
-   preview such as Vercel) that the base branch does not require passes with a
-   `WARNING` as well. Do not fix the base branch's failure on this branch, and
-   do not pass over it in silence: copy each `WARNING` line, with its URLs,
-   into the summary's `## Remaining Risks`. The gate makes this call, not you:
-   a red check that the base branch requires, that is green on the base
-   branch, or that the base branch has never run, blocks. If the gate says the
-   pull request has merge conflicts, merge the base branch into the work
-   branch, resolve them, push, and wait again: GitHub runs no pull request
-   checks on a conflicted pull request. If the failure is in CI's own
-   machinery (a runner that died, a download that timed out), you may rerun
-   the failed job once (`gh run rerun <run-id> --failed`) and must record in
-   the summary that you did, with the run URL and both results. The gate does
-   not tell a flake from a defect: a check that is still red is red.
+1. Run the local pass before the commit: `make preflight-fast` (or the rig's
+   documented fast gate) and the tests of the code you changed. A failing test
+   is fixed; it is never skipped, quarantined or re-baselined away. Do not run
+   the full browser suite or the real-server suites here: the reviewer runs
+   them once, on every device profile.
+2. Commit on the work branch in your worktree. The subject of the hand-off
+   commit (the head of the branch) carries the tag `[skip ci]`, for example
+   `fix: tap rows on phones [skip ci]`. GitHub skips the push and
+   pull_request workflows for a head commit with that tag, and the branch's
+   required checks stay pending, so nothing can merge it before the publish
+   step.
+3. Record the hand-off on this workflow's root (`gc.root_bead_id` on your
+   claimed step bead):
+   `gc bd update "<workflow-root-id>" --set-metadata "gc.build.handoff_commit=$(git rev-parse HEAD)" --set-metadata "gc.build.handoff_branch=<work-branch>"`.
+   The reviewer's subject is exactly that sha; the local worktree is shared git
+   storage, so every session on this machine can read it.
+4. Make exactly one checkpoint push, for durability: `git push origin
+   <work-branch>`, fast-forward only, never to the default branch. Let the
+   repo's pre-push hooks run; never bypass them. Do not run `gh pr create`: no
+   pull request exists until the publish step opens one.
 5. Before closing, run the gate yourself from the launcher rig root, the same
    script the controller runs when this step closes:
    `GC_BEAD_ID=<claimed-step-id> "$(gc formula list --json | python3 -c 'import json,os,sys; c=[os.path.join(os.path.dirname(p),"assets/scripts/checks/pr-ci-green.sh") for p in json.load(sys.stdin)["search_paths"]]; print([p for p in c if os.path.isfile(p)][-1])')"`.
-   It must print `PASS` for the commit at your worktree's `HEAD`. Record the
-   pull request URL, the head sha and that `PASS` line in the summary's
-   `## Verification`. A criterion such as "the pull request's checks are
-   green" is then `covered`, with the run as evidence.
+   With no pull request yet it prints `reviewer-first: CI deferred to publish`
+   and exits 0. Record the commit sha, the branch, that line and the local
+   pass (each command with its exit code) in the summary's `## Verification`.
+   A criterion such as "CI is green" is `covered` only by a later step; say
+   so in `## Remaining Risks` instead of claiming it.
 
-If CI cannot be made green: when a check your branch broke is still red after
-your fixes, a check is stuck, or the fix needs a decision that is not yours,
-do not close the step as passed, do not weaken, skip or re-baseline a test,
-and do not close it over and over to use up the attempts. Write what you found
-in the summary, then close the step as a hard failure that names each failing
-or stuck check with its URL:
-`gc bd update "<claimed-step-id>" --set-metadata gc.outcome=fail --set-metadata gc.failure_class=hard --set-metadata "gc.failure_reason=<check names and URLs>"`,
+If the local pass cannot be made green, or the fix needs a decision that is not
+yours, do not close the step as passed, do not weaken, skip or re-baseline a
+test, and do not close it over and over to use up the attempts. Write what you
+found in the summary, then close the step as a hard failure that names each
+failing command:
+`gc bd update "<claimed-step-id>" --set-metadata gc.outcome=fail --set-metadata gc.failure_class=hard --set-metadata "gc.failure_reason=<commands and results>"`,
 then `gc bd close "<claimed-step-id>"`. `gc.failure_class=hard` ends the step
 at once and review does not start; a failed outcome without it is handed back
 as a new attempt, up to three times.
 
-When push or open_pr is not `true`, do not open a pull request; the gate then
-records `skipped: no publishing intent` and passes. If the branch has an open
-pull request anyway, the gate still requires its checks to be green.
+When push or open_pr is not `true`, make no checkpoint push and open no pull
+request; the gate then records `skipped: no publishing intent` and passes.
 
 The handoff gate is `../assets/scripts/checks/implementation-handoff-valid.sh`:
 the artifact validator described below, then
-`../assets/scripts/checks/pr-ci-green.sh`. The controller does not wait for
-CI. A step closed while a check is unfinished or red, or while the pull
-request is marked ready instead of draft (`gh pr ready --undo <number>` makes
-it a draft again), fails the gate and comes back to you as a new attempt with
-the failing checks in `gc.attempt_log`; after three attempts the step fails and
-review does not start. GitHub or the bead store being unreachable is not an attempt: the
-gate retries, and says `INFRA` rather than `FAIL`.
+`../assets/scripts/checks/pr-ci-green.sh`. The controller does not wait for CI
+and there is none to wait for. A step closed with no `gc.build.handoff_commit`
+recorded, or with a recorded commit that is not the head of your worktree,
+fails the gate and comes back as a new attempt with the reason in
+`gc.attempt_log`; after three attempts the step fails and review does not
+start. GitHub or the bead store being unreachable is not an attempt: the gate
+retries, and says `INFRA` rather than `FAIL`.
 
 Write or update the item summary with these schema-required body sections,
 using the exact `##` headings below in this order:

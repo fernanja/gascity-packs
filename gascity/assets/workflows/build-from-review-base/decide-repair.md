@@ -75,7 +75,7 @@ change; required gates (e.g. preflight) were run with exit codes recorded.
 **When `gc.build.repair_summary_path` is absent on the loop root** (a loop
 launched from a pack pinned before 2026-10-11, or a pass that skipped the
 file), the record never costs a loop (gc-0d4124: after re-review gcas-epwqw8
-had approved commit 8117d8a15 with CI green, decide-repair gcas-2hiz8a
+had approved commit 8117d8a15, decide-repair gcas-2hiz8a
 launched evidence-only loop gcas-oopady, about an hour of factory time, only
 to produce this record). If the most recent re-review's own `status` is
 `approved`, reconstruct the record yourself and approve:
@@ -84,10 +84,11 @@ to produce this record). If the most recent re-review's own `status` is
    lists the loop's step beads; take the one whose `metadata."gc.step_id"`
    ends in `apply-fixes`, with `gc.outcome=pass` and `gc.work_commit` equal to
    the loop root's `gc.build.handoff_commit`. Its `close_reason` is where the
-   proofs went (`V1..Vn` with their results, the commit, the pull request, the
-   pr-ci-green `PASS` line); `gc.build.ci_gate_result` on the loop root is the
-   gate's own record; the re-review report's `## Verification` holds the
-   reviewer's runs with commands and exit codes.
+   proofs went (`V1..Vn` with their results, the commit, the
+   `handoff-commit-ancestor.sh` `PASS` line); the re-review report's
+   `## Verification` holds the reviewer's runs with commands and exit codes.
+   There is no pull request or CI result at this stage (reviewer-first,
+   gc-gef2p8): CI runs once, in the publish step.
 2. Write `{{artifact_root}}/repair-summary-<apply-step-id>.md` as a
    `gc.build.repair-summary.v1` artifact in the shape `apply-fixes` in
    `fix-loop-base` prescribes, with `producer.stage: decide-repair`,
@@ -199,9 +200,10 @@ finalize and the publish step both read these directly and will trust a
 stale value over the true latest artifact. `gc.build.review_subject_commit`
 must be the commit that the MOST RECENT approving re-review actually
 reviewed, resolved fresh at the moment you record it: the commit that
-re-review's report names or, if it names none, the pull request head
-(`gh pr view <number> --json headRefOid --jq .headRefOid`; with no pull
-request, `git rev-parse <branch>` at the launcher rig root). Do not look for
+re-review's report names or, if it names none, the loop root's
+`gc.build.handoff_commit` (with no hand-off recorded, `git rev-parse <branch>`
+at the launcher rig root). There is no pull request to read it from before the
+publish step. Do not look for
 it with `git rev-parse HEAD` in a worktree: the implementation worktree
 belongs to a closed bead and the re-reviewer removes its own worktree, so
 both may be gone by now (gc-mpaqx). Never carry it forward from an earlier

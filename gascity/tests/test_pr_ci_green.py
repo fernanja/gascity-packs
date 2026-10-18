@@ -384,6 +384,20 @@ class PrCiGreenTestCase(unittest.TestCase):
             self.assertIn("pr-ci-green: skipped: ", result.stderr)
             self.assertNotIn("WARNING", result.stderr)
 
+    def assert_deferred(self, result: subprocess.CompletedProcess, commit: str) -> None:
+        """Reviewer-first (gc-gef2p8): a recorded hand-off with no pull request passes, CI deferred to publish."""
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("pr-ci-green: reviewer-first: CI deferred to publish", result.stdout)
+        self.assertIn(commit, result.stdout)
+        self.assertNotIn("PASS", result.stdout)
+        self.assertNotIn("skipped", result.stdout)
+        self.assertNotIn("WARNING", result.stderr)
+        self.assertNotIn("FAIL", result.stderr)
+        self.assertTrue(
+            any("reviewer-first: CI deferred to publish" in line for line in self.fx.recorded_results()),
+            self.fx.recorded_results(),
+        )
+
     def assert_fail(self, result: subprocess.CompletedProcess, *fragments: str) -> None:
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("pr-ci-green: FAIL", result.stderr)
@@ -554,16 +568,61 @@ class ImplementationHandoffTests(PrCiGreenTestCase):
 
         result = self.fx.run()
 
+        # Reviewer-first (gc-gef2p8): with no pull request, the worker must
+        # have recorded the hand-off; the gate no longer asks for a pull request.
         self.assert_fail(
-            result, f"no open pull request for branch {BRANCH} or commit {self.fx.head[:12]} in {REPO}", "gh pr create --draft"
+            result,
+            f"no handoff commit is recorded on root and no open pull request exists for branch {BRANCH} or commit {self.fx.head[:12]} in {REPO}",
+            "gc.build.handoff_commit",
+            "gc.build.handoff_branch",
         )
+        self.assertNotIn("gh pr create", result.stderr)
 
     def test_unpushed_commit_fails_when_the_workflow_publishes(self) -> None:
         self.fx.pulls([])
         self.fx.commit_pulls(None)  # GitHub has never seen the commit
         self.fx.route_error(f"repos/{REPO}/compare/main...{self.fx.head}", NOT_FOUND)
 
-        self.assert_fail(self.fx.run(), f"no open pull request for branch {BRANCH}")
+        self.assert_fail(self.fx.run(), f"no open pull request exists for branch {BRANCH}", "gc.build.handoff_commit")
+
+    def test_a_recorded_handoff_with_no_pull_request_defers_ci_to_publish(self) -> None:
+        self.fx.implementation_item(root_extra={"gc.build.handoff_commit": self.fx.head, "gc.build.handoff_branch": BRANCH})
+        self.fx.pulls([])
+        self.fx.commit_pulls([])
+        self.fx.route(f"repos/{REPO}/compare/main...{self.fx.head}", {"ahead_by": 1, "status": "ahead"})
+
+        result = self.fx.run()
+
+        self.assert_deferred(result, self.fx.head[:12])
+
+    def test_a_recorded_handoff_that_is_already_on_the_default_branch_is_still_nothing_to_publish(self) -> None:
+        self.fx.implementation_item(root_extra={"gc.build.handoff_commit": self.fx.head, "gc.build.handoff_branch": BRANCH})
+        self.fx.pulls([])
+        self.fx.commit_pulls([])
+        self.fx.route(f"repos/{REPO}/compare/main...{self.fx.head}", {"ahead_by": 0, "status": "identical"})
+
+        self.assert_skipped(self.fx.run(), "nothing to publish")
+
+    def test_a_recorded_handoff_with_a_pull_request_is_judged_on_its_checks_not_deferred(self) -> None:
+        self.fx.implementation_item(root_extra={"gc.build.handoff_commit": self.fx.head, "gc.build.handoff_branch": BRANCH})
+        self.fx.checks([check_run("ci-gate", status="in_progress", conclusion=None)])
+
+        result = self.fx.run()
+
+        self.assert_fail(result, "PENDING ci-gate")
+        self.assertNotIn("CI deferred to publish", result.stdout)
+
+    def test_a_recorded_handoff_without_publishing_intent_and_no_pull_request_is_a_plain_skip(self) -> None:
+        self.fx.implementation_item(
+            push="false", open_pr="false", root_extra={"gc.build.handoff_commit": self.fx.head, "gc.build.handoff_branch": BRANCH}
+        )
+        self.fx.pulls([])
+        self.fx.commit_pulls([])
+
+        result = self.fx.run()
+
+        self.assert_skipped(result, "no publishing intent", loud=False)
+        self.assertNotIn("CI deferred to publish", result.stdout)
 
     def test_a_branch_pushed_under_another_name_is_found_by_its_commit(self) -> None:
         # The worktree branch is BRANCH; it was pushed as another ref, so no
@@ -1285,6 +1344,14 @@ class FixLoopHandoffTests(PrCiGreenTestCase):
 
         self.assert_pass(result)
         self.assertIn("pr_state=draft", result.stdout)
+
+    def test_recorded_commit_with_no_pull_request_defers_ci_to_publish(self) -> None:
+        self.fx.fix_loop(commit=self.fx.head, branch=BRANCH)
+        self.fx.pulls([])
+        self.fx.commit_pulls([])
+        self.fx.route(f"repos/{REPO}/compare/main...{self.fx.head}", {"ahead_by": 1, "status": "ahead"})
+
+        self.assert_deferred(self.fx.run(), self.fx.head[:12])
 
     def test_a_pull_request_marked_ready_before_re_review_fails(self) -> None:
         self.fx.fix_loop(commit=self.fx.head, branch=BRANCH)

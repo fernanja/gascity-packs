@@ -40,11 +40,11 @@ description = "Maximum fix/review attempts."
 default = "10"
 
 [vars.push]
-description = "Publishing intent of the build under repair. With open_pr, true means each fix pass ends with the branch pushed and its pull request's checks green before re-review."
+description = "Publishing intent of the build under repair. With open_pr, true means each fix pass ends with a local fix commit recorded as gc.build.handoff_commit and one [skip ci] checkpoint push, then goes straight to re-review. No pull request is opened and CI does not run until the publish step (reviewer-first, gc-gef2p8)."
 default = "false"
 
 [vars.open_pr]
-description = "Publishing intent of the build under repair. See push."
+description = "Publishing intent of the build under repair. See push: a fix pass opens no pull request and waits for no CI."
 default = "false"
 
 [[steps]]
@@ -65,7 +65,7 @@ max_attempts = 3
 
 [steps.check.check]
 mode = "exec"
-path = "../assets/scripts/checks/pr-ci-green.sh"
+path = "../assets/scripts/checks/handoff-commit-ancestor.sh"
 timeout = "2m"
 
 [[steps]]

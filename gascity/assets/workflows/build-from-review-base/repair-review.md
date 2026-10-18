@@ -93,8 +93,10 @@ its claim instead of waiting:
    ```
 
    `push` and `open_pr` carry this build's publishing intent into the loop:
-   with both `true`, each fix pass must end with the branch pushed and its
-   pull request's checks green before the re-review starts (gc-68exu).
+   with both `true`, each fix pass ends with a local fix commit recorded as
+   `gc.build.handoff_commit` and one `[skip ci]` checkpoint push, and the
+   re-review starts from that commit. No pull request is opened and no CI runs
+   until the publish step (reviewer-first, gc-gef2p8).
 
    `<routed-to>` is this step bead's own `gc.routed_to` value. Never attach
    the loop to a bead with `--on` — not to this step's claimed bead, not to

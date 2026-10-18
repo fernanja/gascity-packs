@@ -21,10 +21,19 @@ gc bd update "$CLAIMED_BEAD_ID" \
 gc bd close "$CLAIMED_BEAD_ID" --reason 'Publishing disabled; build-basic result approved.'
 ```
 
-When push and open_pr are both enabled, the implementation step has already
-pushed the branch and opened a draft pull request with green checks
-(gc-68exu). Do not open a second one: confirm its head is the approved commit
-and mark it ready (`gh pr ready <number>`). When the build did not finalize
-approved, leave the draft as it is.
+When push and open_pr are both enabled, the implementation step made only a
+`[skip ci]` checkpoint push and opened no pull request (reviewer-first,
+gc-gef2p8); this step runs CI, once. Push the approved branch head WITHOUT the
+skip tag (an empty commit `chore: run CI` on top is acceptable when the head
+commit carries it), open the pull request as a draft with the source bead id in
+the title, wait for every required check on the head sha
+(`pr-ci-green.sh --repo <owner>/<repo> --pr <n> --commit <sha>`, in manual
+mode, must print `PASS`), and mark it ready (`gh pr ready <number>`) on green.
+On a red required check, record the failing check names on the workflow root as
+`gc.build.publish_ci_failures`, leave the draft a draft and hand the build back
+to the fix loop for one more local round before publishing again; never retry
+CI blind. The full protocol is in
+`assets/workflows/build-from-review-base/publish.md`. When the build did not
+finalize approved, open nothing.
 
 Close only after the push, PR creation, or no-op publish result is recorded.

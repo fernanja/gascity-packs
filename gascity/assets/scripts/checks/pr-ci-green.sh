@@ -1,11 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# CI-green handoff gate (gc-68exu).
+# CI-green gate (gc-68exu), reviewer-first since gc-gef2p8.
 #
-# A step that hands a commit to review may close only when that commit is the
-# head of an open DRAFT pull request and GitHub's checks on it are complete and
-# green: every check finished, the latest run of every workflow for the commit
+# Reviewer-first: a step that hands a commit to review records it as
+# gc.build.handoff_commit on the workflow root and makes one `[skip ci]`
+# checkpoint push. While no pull request exists the gate prints
+# `reviewer-first: CI deferred to publish` and exits 0; the publish step opens
+# the pull request and runs this script in manual mode to wait for the one CI
+# run. When a pull request does exist (a rerun after publish), the rule below
+# applies.
+#
+# A commit that has a pull request may pass only when it is the head of an
+# open DRAFT pull request and GitHub's checks on it are complete and green: every check finished, the latest run of every workflow for the commit
 # finished, every status check the base branch requires reported. A skipped
 # check counts as green. A red check blocks, with two exceptions that pass
 # with a WARNING: a GitHub Actions job the base branch does not require whose
@@ -26,10 +33,11 @@ set -euo pipefail
 # It writes one key there, best effort: gc.build.ci_gate_result, the last
 # PASS or skipped line.
 #
-# Exit 0: green, or an explicit `skipped: <reason>` (no publishing intent and
-# no pull request, the remote is not GitHub, gh missing). Every skip is on
-# stderr as well as stdout.
-# Exit 1: red, unfinished, no pull request, not a draft, head mismatch.
+# Exit 0: green, `reviewer-first: CI deferred to publish`, or an explicit
+# `skipped: <reason>` (no publishing intent and no pull request, the remote is
+# not GitHub, gh missing). Every skip is on stderr as well as stdout.
+# Exit 1: red, unfinished, no pull request and no recorded hand-off, not a
+# draft, head mismatch.
 # Exit 75: no verdict (GitHub or the bead store kept failing, or gh cannot
 # authenticate in a workflow that intends to publish). Under the controller
 # the script retries until the check timeout ends it instead, because only a

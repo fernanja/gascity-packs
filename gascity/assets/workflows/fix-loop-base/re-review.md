@@ -5,39 +5,40 @@ after fixes. Continue only while the iteration count is below
 `{{max_iterations}}`. Record the follow-up review report path on workflow root
 metadata as `gc.build.review_report_path` before closing.
 
-Start with the automated checks, before reading any code. Find the pull
-request for the work branch (`gh pr list --head <branch>`) and read its checks
-for the commit under review (`gh pr checks <number>`). If checks are still
-running, wait for them on the exact run (`gh run list --commit <sha>`, then
-`gh run watch <run-id> --exit-status` under the bounded wrapper apply-fixes
-uses) rather than reviewing a commit whose result is unknown. Every failed check on that commit is a
-required finding: name the job, the failing step and the decisive log lines,
-and return `changes_required` without spending the review on problems a
-machine has already reported (gc-68exu). Call a failure unrelated to the diff
-only with evidence: the same step failing on the default branch, or passing on
-a rerun of the same commit. If no pull request or no check run exists for the
-commit, say so in the report as missing evidence; do not treat silence as a
-pass.
+Review the local hand-off commit (reviewer-first, gc-gef2p8). CI does not run
+between a fix pass and this re-review: the fix pass handed you a commit, not a
+pull request, and CI runs once, on the commit that is finally approved, in the
+publish step. The subject is `gc.build.handoff_commit` on this loop's workflow
+root (with `gc.build.handoff_branch`), which the apply-fixes gate has verified
+is on the work branch. If the key is empty, say so in the report and review the
+head of the work branch at the launcher rig root instead.
 
-When the workflow publishes (push and open_pr both `true`), the step that
-handed you this commit could not close until
-`../assets/scripts/checks/pr-ci-green.sh` saw complete, green checks on the
-pull request head. That does not replace the reading above: the head can move
-after the gate ran, and a gate that recorded `skipped` proves nothing. Review
-the commit at the pull request head. If your checkout is on a different
-commit, stop and say so in the report rather than reviewing one commit while
-CI vouches for another.
+Do not consult the pull request list or `gh pr checks`: there is no pull
+request yet, and its check list is not evidence at this stage. Your test
+evidence is the fix pass's local pass in its repair summary plus the runs you
+make yourself below. If your checkout is on a different commit from the
+subject, stop and say so in the report rather than reviewing one commit while
+another is handed over.
 
 Where to work (gc-mpaqx): in your own detached worktree of the commit under
 review, never in the implementation worktree. That worktree belongs to a
 closed bead and the engine can remove it between two of your commands, so
-never depend on it existing. Make yours at
+never depend on it existing. The commit is already in the rig repository,
+which every worktree shares, so no fetch is needed. Make yours of the hand-off
+commit at
 `$GC_CITY/.gc/worktrees/$GC_RIG-scratch/re-review-<claimed-step-id>`, run
-everything there, re-resolve the head there, and remove it before closing
-this step. Name the commit you reviewed (`git rev-parse HEAD` there) in the
-report. The exact commands, and what to do when a fresh worktree lacks
-installed dependencies, are under "Where to work" in this pack's
+everything there, re-resolve the head there, and remove it before closing this
+step. Name the commit you reviewed (`git rev-parse HEAD`
+there) in the report. The exact commands, and what to do when a fresh worktree
+lacks installed dependencies, are under "Where to work" in this pack's
 `assets/workflows/build-from-review-base/review.md`.
+
+Probe the fixed behaviour in a browser from that worktree against the available
+seeded stack, then run, once each: the full browser suite on every configured
+device profile and the rig's real-server suites. These are the runs CI does not
+make, and the defects they find are the reason this re-review comes before CI.
+The repo's one-full-run rule holds: a second full run only after a failed first
+one, and only for the failure.
 
 The preflight gate is not a test run for every kind of change. Find out what it
 actually executes in this repo before treating it as coverage (in the ascent

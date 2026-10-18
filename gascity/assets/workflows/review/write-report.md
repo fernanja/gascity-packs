@@ -16,6 +16,16 @@ verification instead of re-running everything. Check it explicitly:
   recorded failure.
 - Recorded with exit code 0: cite it as passing evidence for that item.
 
+Reviewer-first (gc-gef2p8): the subject under review is the local hand-off
+commit, `gc.build.handoff_commit` on the workflow root, checked out as
+`git worktree add --detach <scratch> <sha>` from the rig repository. Name that
+sha in the report. No pull request exists before the publish step, so the PR
+check list is not required evidence; the evidence is the worker's preflight
+record plus your own runs of the full browser suite on every configured device
+profile and the rig's real-server suites, each run once (a second full run only
+after a failed first). CI runs once, on the approved commit, in the publish
+step.
+
 This is the only place a preflight failure is gated — do not re-run preflight
 yourself here, and do not invent a separate fix loop; a `changes_required`
 verdict already routes through this workflow's existing repair-review stage.

@@ -68,7 +68,10 @@ Anything the report says about CI comes from the pinned gate, not from your
 own reading of GitHub: cite `gc.build.ci_gate_result` on the workflow root
 (written by `../assets/scripts/checks/pr-ci-green.sh`, which reads check runs
 and commit statuses in both shapes GitHub returns); if the key is absent, run
-that script once and cite its result. Never parse `statusCheckRollup` or the
+that script once and cite its result. In the reviewer-first flow (gc-gef2p8)
+finalize runs before CI: the result is `reviewer-first: CI deferred to
+publish`, the report says CI has not run yet and does not claim green checks,
+and the publish step records the real result. Never parse `statusCheckRollup` or the
 checks API by hand here: its entries mix `CheckRun` (a `conclusion`) and
 `StatusContext` (a `state`), and a hand-rolled check rejected the second shape
 and cost a retry (gc-rjjb1o: gcas-e8nvpe, PR #2744).
