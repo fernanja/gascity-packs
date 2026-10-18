@@ -156,6 +156,60 @@ class HandoffCommitAncestorTests(unittest.TestCase):
         self.fix_loop()
         self.assert_fail(self.run_gate(), "no handoff commit is recorded", "gc.build.handoff_commit")
 
+    # gc-jhuzd0: the same gate on the implementation step. GC_BEAD_ID is the
+    # step, its gc.root_bead_id is the item root, and the item root carries the
+    # keys (plus gc.drain_member_id, the source anchor).
+
+    def implementation_item(self, *, commit: str | None = None, branch: str | None = None, push: str = "true", open_pr: str = "true") -> None:
+        root = {"gc.var.push": push, "gc.var.open_pr": open_pr, "gc.drain_member_id": "anchor", "gc.work_dir": str(self.repo)}
+        if commit is not None:
+            root["gc.build.handoff_commit"] = commit
+        if branch is not None:
+            root["gc.build.handoff_branch"] = branch
+        self.bead("step", {"gc.root_bead_id": "item-root"})
+        self.bead("item-root", root)
+        self.bead("anchor", {"work_dir": str(self.repo)})
+
+    def test_implementation_step_with_publishing_intent_and_no_keys_fails_naming_both_calls(self) -> None:
+        self.implementation_item()
+        result = self.run_gate()
+        self.assert_fail(
+            result,
+            "no handoff commit is recorded",
+            "item-root",
+            'gc bd update "item-root" --set-metadata "gc.build.handoff_commit=$(git rev-parse HEAD)"',
+            'gc bd update "item-root" --set-metadata "gc.build.handoff_branch=<work-branch>"',
+        )
+        self.assertEqual(result.stderr.count("gc bd update"), 2, result.stderr)
+        self.assertEqual(len([line for line in result.stderr.splitlines() if line.strip()]), 1, result.stderr)
+
+    def test_implementation_step_with_a_commit_and_no_branch_fails_naming_the_branch_call(self) -> None:
+        self.implementation_item(commit=self.first)
+        self.assert_fail(
+            self.run_gate(),
+            "gc.build.handoff_branch is not recorded on item-root",
+            f'gc bd update "item-root" --set-metadata "gc.build.handoff_branch=<work-branch>"',
+            f'--set-metadata "gc.build.handoff_commit={self.first}"',
+        )
+
+    def test_implementation_step_with_both_keys_passes(self) -> None:
+        self.implementation_item(commit=self.first, branch=BRANCH)
+        result = self.run_gate()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("handoff-commit-ancestor: PASS", result.stdout)
+
+    def test_implementation_step_with_push_false_and_no_keys_skips(self) -> None:
+        self.implementation_item(push="false", open_pr="false")
+        result = self.run_gate()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("handoff-commit-ancestor: skipped: no publishing intent", result.stdout)
+
+    def test_implementation_step_with_push_true_and_open_pr_false_and_no_keys_skips(self) -> None:
+        self.implementation_item(push="true", open_pr="false")
+        result = self.run_gate()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("skipped", result.stdout)
+
     def test_nothing_recorded_without_publishing_intent_is_an_explicit_skip(self) -> None:
         self.fix_loop(push="false", open_pr="false")
         result = self.run_gate()
@@ -222,10 +276,20 @@ class HandoffCommitAncestorTests(unittest.TestCase):
         self.fix_loop(commit=commit, branch="fix/never-pushed")
         self.assert_fail(self.run_gate(), "checkpoint not on origin", "fix/never-pushed")
 
-    def test_an_unreachable_origin_fails_as_not_on_origin(self) -> None:
+    def test_an_unreachable_origin_with_no_remote_tracking_ref_fails_as_not_on_origin(self) -> None:
+        self.git("remote", "set-url", "origin", str(self.origin) + ".missing")
+        self.git("update-ref", "-d", f"refs/remotes/origin/{BRANCH}")
+        self.fix_loop(commit=self.first)
+        self.assert_fail(self.run_gate(), "checkpoint not on origin", "no remote-tracking ref exists")
+
+    def test_an_unreachable_origin_falls_back_to_the_remote_tracking_ref_the_checkpoint_push_wrote(self) -> None:
+        # The controller has no git credentials (b7e55d93): the fetch is best effort.
         self.git("remote", "set-url", "origin", str(self.origin) + ".missing")
         self.fix_loop(commit=self.first)
-        self.assert_fail(self.run_gate(), "checkpoint not on origin")
+        result = self.run_gate()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("handoff-commit-ancestor: PASS", result.stdout)
+        self.assertIn("using the existing remote-tracking ref", result.stderr)
 
     def test_a_handoff_on_the_default_branch_fails(self) -> None:
         self.git("checkout", "-q", "main")

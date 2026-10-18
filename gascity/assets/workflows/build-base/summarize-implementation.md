@@ -40,7 +40,28 @@ item root ids, comma-separated:
 
 `gc bd update "<workflow-root-id>" --set-metadata "gc.build.handoff_commit=<last item's commit>" --set-metadata "gc.build.handoff_branch=<last item's branch>" --set-metadata "gc.build.handoff_items=<item-root-1>,<item-root-2>"`
 
-When no item recorded a hand-off (a workflow that does not publish), write
+Before you record the bridge above, check every item root: when it lacks one
+or both keys although the workflow publishes
+(`gc.var.push` and `gc.var.open_pr` both `true` on the workflow root), derive
+them; do not bridge nothing (gc-jhuzd0: two of the first four items closed with
+a correct checkpoint on origin and no keys). Read that item's close reason and
+its implementation summary for the branch and the commit sha, then verify them
+on the shared repository before you record anything: the sha exists
+(`git cat-file -e <sha>^{commit}`), is an ancestor of the branch head
+(`git merge-base --is-ancestor <sha> origin/<branch>`, after `git fetch origin
+<branch>`), carries a `[skip ci]` tag, and the branch is not the default
+branch. Record the derived pair on the item root AND on the workflow root,
+and say in the summary's Verification section which items you derived, from
+which text, and which checks passed:
+
+`gc bd update "<item-root-id>" --set-metadata "gc.build.handoff_commit=<sha>" --set-metadata "gc.build.handoff_branch=<branch>"`
+
+Fail only when nothing can be derived (no sha and no branch in the close reason
+or the summary, or a derived pair that fails a check): close this step as a hard
+failure with `gc.failure_class=hard` and a `gc.failure_reason` that names the
+item root and what was missing.
+
+When no item recorded a hand-off and the workflow does not publish, write
 nothing and say so in the summary's Verification section. When the items name
 different branches, do not guess: say so in Remaining Risks and record the last
 item's pair anyway, because the review will check the commit it reads out.

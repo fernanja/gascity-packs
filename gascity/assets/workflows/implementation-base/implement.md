@@ -40,15 +40,18 @@ not wait for CI:
    pull_request workflows for a head commit with that tag, and the branch's
    required checks stay pending, so nothing can merge it before the publish
    step.
-3. Record the hand-off on this workflow's root (`gc.root_bead_id` on your
-   claimed step bead):
-   `gc bd update "<workflow-root-id>" --set-metadata "gc.build.handoff_commit=$(git rev-parse HEAD)" --set-metadata "gc.build.handoff_branch=<work-branch>"`.
-   The reviewer's subject is exactly that sha; the local worktree is shared git
-   storage, so every session on this machine can read it.
-4. Make exactly one checkpoint push, for durability: `git push origin
+3. Make exactly one checkpoint push, for durability: `git push origin
    <work-branch>`, fast-forward only, never to the default branch. Let the
    repo's pre-push hooks run; never bypass them. Do not run `gh pr create`: no
    pull request exists until the publish step opens one.
+4. Record the hand-off keys on this workflow's root (`gc.root_bead_id` on your
+   claimed step bead), after the push so the sha is final:
+   `gc bd update "<workflow-root-id>" --set-metadata "gc.build.handoff_commit=$(git rev-parse HEAD)" --set-metadata "gc.build.handoff_branch=<work-branch>"`.
+   Both keys, on the root, every time: a correct checkpoint on origin with no
+   keys recorded is a failed hand-off (gc-jhuzd0: two of the first four items
+   did exactly this and the summarize step then bridged nothing). The
+   reviewer's subject is exactly that sha; the local worktree is shared git
+   storage, so every session on this machine can read it.
 5. Before closing, run the gate yourself from the launcher rig root, the same
    script the controller runs when this step closes:
    `GC_BEAD_ID=<claimed-step-id> "$(gc formula list --json | python3 -c 'import json,os,sys; c=[os.path.join(os.path.dirname(p),"assets/scripts/checks/pr-ci-green.sh") for p in json.load(sys.stdin)["search_paths"]]; print([p for p in c if os.path.isfile(p)][-1])')"`.
@@ -57,6 +60,13 @@ not wait for CI:
    pass (each command with its exit code) in the summary's `## Verification`.
    A criterion such as "CI is green" is `covered` only by a later step; say
    so in `## Remaining Risks` instead of claiming it.
+6. Close the step only after the keys read back. Run the hand-off key gate
+   the same way, from the launcher rig root:
+   `GC_BEAD_ID=<claimed-step-id> "$(gc formula list --json | python3 -c 'import json,os,sys; c=[os.path.join(os.path.dirname(p),"assets/scripts/checks/handoff-commit-ancestor.sh") for p in json.load(sys.stdin)["search_paths"]]; print([p for p in c if os.path.isfile(p)][-1])')"`.
+   It must print `handoff-commit-ancestor: PASS` (or `skipped:` when push or
+   open_pr is not `true`). A `FAIL` names the two `gc bd update` calls that
+   record `gc.build.handoff_commit` and `gc.build.handoff_branch`: run them,
+   run the gate again, and only then close the step.
 
 If the local pass cannot be made green, or the fix needs a decision that is not
 yours, do not close the step as passed, do not weaken, skip or re-baseline a
@@ -73,9 +83,11 @@ request; the gate then records `skipped: no publishing intent` and passes.
 
 The handoff gate is `../assets/scripts/checks/implementation-handoff-valid.sh`:
 the artifact validator described below, then
+`../assets/scripts/checks/handoff-commit-ancestor.sh` (the keys), then
 `../assets/scripts/checks/pr-ci-green.sh`. The controller does not wait for CI
 and there is none to wait for. A step closed with no `gc.build.handoff_commit`
-recorded, or with a recorded commit that is not the head of your worktree,
+or no `gc.build.handoff_branch` recorded on the root, or with a recorded commit
+that is not the head of your worktree,
 fails the gate and comes back as a new attempt with the reason in
 `gc.attempt_log`; after three attempts the step fails and review does not
 start. GitHub or the bead store being unreachable is not an attempt: the gate

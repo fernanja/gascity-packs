@@ -1,7 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Fix-pass hand-off gate (gc-gef2p8, reviewer-first flow).
+# Hand-off gate (gc-gef2p8, reviewer-first flow; extended to the implementation
+# steps by gc-jhuzd0).
+#
+# Used by the fix-pass apply step and, chained by implementation-handoff-valid.sh,
+# by the implementation steps (do-work, do-work-item, implementation-base,
+# implementation-item-base). In both, GC_BEAD_ID is the step and the keys are on
+# its workflow root (gc.root_bead_id): the fix-loop root, or the item root.
+# gc-jhuzd0: two of the first four reviewer-first items closed with a correct
+# checkpoint on origin and no keys on the item root, so the summarize step
+# bridged nothing. A publishing workflow now fails the close until both keys are
+# recorded, and the failure names the two `gc bd update` calls to run.
 #
 # A fix pass hands its work to the re-review as a local commit. It closes only
 # when the commit it recorded as gc.build.handoff_commit exists in the rig
@@ -59,6 +69,12 @@ run_bounded() {
   fi
 }
 
+# record_calls <root-id> <commit> <branch>: the two calls that record the
+# hand-off, one per key, as one line for a failure message.
+record_calls() {
+  printf 'gc bd update "%s" --set-metadata "gc.build.handoff_commit=%s" ; gc bd update "%s" --set-metadata "gc.build.handoff_branch=%s"' "$1" "$2" "$1" "$3"
+}
+
 command -v python3 >/dev/null 2>&1 || fail "python3 is required on PATH"
 command -v git >/dev/null 2>&1 || fail "git is required on PATH"
 [ -n "${GC_BEAD_ID:-}" ] || fail "GC_BEAD_ID is required"
@@ -100,14 +116,14 @@ COMMIT="" BRANCH="" PUSH="" OPEN_PR="" WORK_DIR=""
 
 if [ -z "$COMMIT" ]; then
   if [ "$PUSH" = "true" ] && [ "$OPEN_PR" = "true" ]; then
-    fail "workflow root $ROOT_ID publishes (push=$PUSH open_pr=$OPEN_PR) but no handoff commit is recorded. Commit the fix, then record gc.build.handoff_commit and gc.build.handoff_branch on $ROOT_ID"
+    fail "no handoff commit is recorded: workflow root $ROOT_ID publishes (push=$PUSH open_pr=$OPEN_PR) but carries no gc.build.handoff_commit. Commit the work, make the one checkpoint push, then run both calls and close the step again: $(record_calls "$ROOT_ID" '$(git rev-parse HEAD)' '<work-branch>')"
   fi
   say "skipped: no publishing intent (push=${PUSH:-unset} open_pr=${OPEN_PR:-unset}) and no handoff recorded on $ROOT_ID"
   exit 0
 fi
 
 printf '%s' "$COMMIT" | grep -Eq '^[0-9a-fA-F]{7,64}$' || fail "gc.build.handoff_commit on $ROOT_ID is not a commit sha: '${COMMIT:0:60}'"
-[ -n "$BRANCH" ] || fail "gc.build.handoff_branch is not recorded on $ROOT_ID. Record the work branch that carries $COMMIT"
+[ -n "$BRANCH" ] || fail "gc.build.handoff_branch is not recorded on $ROOT_ID. Record the work branch that carries ${COMMIT:0:12}: $(record_calls "$ROOT_ID" "$COMMIT" '<work-branch>')"
 
 REPO=""
 for candidate in "$WORK_DIR" "${GC_WORK_DIR:-}" "${GC_STORE_PATH:-}" "$PWD"; do

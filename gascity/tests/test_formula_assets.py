@@ -2814,9 +2814,67 @@ class FormulaAssetTests(unittest.TestCase):
         # Exit codes pass through (75 is "no verdict", not a failed attempt).
         self.assertLess(
             wrapper.index('"$SCRIPT_DIR/build-artifact-valid.sh" || exit $?'),
+            wrapper.index('"$SCRIPT_DIR/handoff-commit-ancestor.sh" || exit $?'),
+        )
+        self.assertLess(
+            wrapper.index('"$SCRIPT_DIR/handoff-commit-ancestor.sh" || exit $?'),
             wrapper.index('exec "$SCRIPT_DIR/pr-ci-green.sh"'),
         )
         self.assertNotIn("|| exit 1", wrapper.split("SCRIPT_DIR=", 1)[1].split("done", 1)[1])
+
+    def test_implement_steps_record_the_handoff_keys_in_the_close_checklist(self) -> None:
+        # gc-jhuzd0: two of the first four reviewer-first items closed with a
+        # correct checkpoint on origin and no hand-off keys. The instruction is
+        # a numbered checklist item right before the item that closes the step,
+        # and the gate that enforces it is named in all four variants.
+        root = pathlib.Path(__file__).resolve().parents[1]
+        for doc in (
+            "do-work/implement.md",
+            "do-work-item/implement-item.md",
+            "implementation-base/implement.md",
+            "implementation-item-base/implement-item.md",
+        ):
+            with self.subTest(doc=doc):
+                text = (root / "assets" / "workflows" / doc).read_text(encoding="utf-8")
+                flat = " ".join(text.split())
+                record = text.index("\n4. Record the hand-off keys on this workflow's root")
+                gate = text.index("\n5. Before closing, run the gate yourself")
+                close = text.index("\n6. Close the step only after the keys read back.")
+                self.assertLess(record, gate)
+                self.assertLess(gate, close)
+                # The record item is no longer a paragraph above the list.
+                self.assertEqual(text.count("--set-metadata \"gc.build.handoff_commit=$(git rev-parse HEAD)\""), 1)
+                for fragment in (
+                    "Both keys, on the root, every time",
+                    "A `FAIL` names the two `gc bd update` calls",
+                    "`handoff-commit-ancestor: PASS`",
+                    "`../assets/scripts/checks/handoff-commit-ancestor.sh` (the keys), then `../assets/scripts/checks/pr-ci-green.sh`",
+                    "or no `gc.build.handoff_branch` recorded on the root",
+                    "assets/scripts/checks/handoff-commit-ancestor.sh",
+                ):
+                    self.assertIn(fragment, flat, f"{doc} lost: {fragment}")
+
+    def test_summarize_derives_missing_item_handoff_keys_before_bridging(self) -> None:
+        root = pathlib.Path(__file__).resolve().parents[1]
+        text = " ".join(
+            (root / "assets" / "workflows" / "build-base" / "summarize-implementation.md").read_text(encoding="utf-8").split()
+        )
+        for fragment in (
+            "Before you record the bridge above, check every item root",
+            "(`gc.var.push` and `gc.var.open_pr` both `true` on the workflow root), derive them",
+            "Read that item's close reason and its implementation summary for the branch and the commit sha",
+            "`git cat-file -e <sha>^{commit}`",
+            "`git merge-base --is-ancestor <sha> origin/<branch>`",
+            "carries a `[skip ci]` tag",
+            "the branch is not the default branch",
+            "Record the derived pair on the item root AND on the workflow root",
+            "which items you derived, from which text, and which checks passed",
+            "Fail only when nothing can be derived",
+            "`gc.failure_class=hard`",
+        ):
+            with self.subTest(fragment=fragment):
+                self.assertIn(fragment, text)
+        self.assertLess(text.index("Before you record the bridge above"), text.index("When no item recorded a hand-off and the workflow does not publish"))
 
     def test_the_documented_wait_wrapper_bounds_the_wait_and_never_reports_a_killed_wait_as_success(self) -> None:
         if shutil.which("perl") is None:

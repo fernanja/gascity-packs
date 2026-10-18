@@ -163,7 +163,7 @@ class Fixture:
         self.git("checkout", "-q", "-b", BRANCH)
         (self.repo / "widget.py").write_text("print('widget')\n", encoding="utf-8")
         self.git("add", "widget.py")
-        self.git("commit", "-q", "-m", "widget")
+        self.git("commit", "-q", "-m", "widget [skip ci]")
         self.head = self.git("rev-parse", "HEAD")
         self.git("remote", "add", "origin", origin)
         self.route(f"repos/{REPO}", {"default_branch": "main"})
@@ -1569,11 +1569,24 @@ class ImplementationHandoffChainTests(PrCiGreenTestCase):
         super().setUp()
         self.summary = self.fx.tmp / "task-anchor-summary.md"
         self.summary.write_text(self.SUMMARY, encoding="utf-8")
+        # The checkpoint push (not possible against the fixture's GitHub URL)
+        # left this remote-tracking ref in the shared repository.
+        self.fx.git("update-ref", f"refs/remotes/origin/{BRANCH}", self.fx.head)
         self.item()
         self.fx.pulls([self.fx.pull()])
 
-    def item(self, **intent: str) -> None:
-        self.fx.implementation_item(root_extra={"gc.implementation.summary_path": str(self.summary)}, **intent)
+    def run_chain(self, **kwargs) -> subprocess.CompletedProcess:
+        # The ancestor gate's best-effort fetch must fail fast, not wait on GitHub.
+        env = {"HANDOFF_ANCESTOR_NETWORK_TIMEOUT_SECONDS": "5", **kwargs.pop("env", {})}
+        return self.fx.run(script=HANDOFF_SCRIPT, env=env, **kwargs)
+
+    def item(self, *, keys: bool = True, branch: bool = True, **intent: str) -> None:
+        extra = {"gc.implementation.summary_path": str(self.summary)}
+        if keys:
+            extra["gc.build.handoff_commit"] = self.fx.head
+            if branch:
+                extra["gc.build.handoff_branch"] = BRANCH
+        self.fx.implementation_item(root_extra=extra, **intent)
         self.fx.bead(
             "step",
             {
@@ -1586,7 +1599,7 @@ class ImplementationHandoffChainTests(PrCiGreenTestCase):
     def test_valid_summary_and_green_checks_pass_both_gates(self) -> None:
         self.fx.checks([check_run("ci-gate")])
 
-        result = self.fx.run(script=HANDOFF_SCRIPT)
+        result = self.run_chain()
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("build artifact valid", result.stdout)
@@ -1595,7 +1608,7 @@ class ImplementationHandoffChainTests(PrCiGreenTestCase):
     def test_valid_summary_with_red_checks_fails(self) -> None:
         self.fx.checks([check_run("ci-gate", conclusion="failure")])
 
-        result = self.fx.run(script=HANDOFF_SCRIPT)
+        result = self.run_chain()
 
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("build artifact valid", result.stdout)
@@ -1605,7 +1618,7 @@ class ImplementationHandoffChainTests(PrCiGreenTestCase):
         self.summary.write_text(self.SUMMARY.replace("status: approved", "status: bogus"), encoding="utf-8")
         self.fx.checks([check_run("ci-gate")])
 
-        result = self.fx.run(script=HANDOFF_SCRIPT)
+        result = self.run_chain()
 
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("build-artifact-check:", result.stderr)
@@ -1616,7 +1629,7 @@ class ImplementationHandoffChainTests(PrCiGreenTestCase):
         self.fx.pulls([])
         self.fx.commit_pulls(None)
 
-        result = self.fx.run(script=HANDOFF_SCRIPT)
+        result = self.run_chain()
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("pr-ci-green: skipped: no publishing intent", result.stdout)
@@ -1625,10 +1638,41 @@ class ImplementationHandoffChainTests(PrCiGreenTestCase):
         self.fx.checks([check_run("ci-gate")])
         self.fx.route_error(self.fx.check_runs_path(), "gh: Server Error (HTTP 502)")
 
-        result = self.fx.run(script=HANDOFF_SCRIPT, env={"PR_CI_GREEN_INFRA_BUDGET_SECONDS": "1"})
+        result = self.run_chain(env={"PR_CI_GREEN_INFRA_BUDGET_SECONDS": "1"})
 
         self.assertEqual(result.returncode, NO_VERDICT, result.stdout + result.stderr)
         self.assertIn("pr-ci-green: INFRA", result.stderr)
+
+    def test_publishing_item_with_no_hand_off_keys_fails_naming_both_calls_before_github_is_asked(self) -> None:
+        self.item(keys=False)
+
+        result = self.run_chain()
+
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("build artifact valid", result.stdout)
+        self.assertIn("handoff-commit-ancestor: FAIL no handoff commit is recorded", result.stderr)
+        self.assertIn('gc bd update "root" --set-metadata "gc.build.handoff_commit=', result.stderr)
+        self.assertIn('gc bd update "root" --set-metadata "gc.build.handoff_branch=', result.stderr)
+        self.assertEqual(self.fx.gh_calls(), [])
+
+    def test_publishing_item_with_only_the_commit_recorded_fails_naming_the_branch_call(self) -> None:
+        self.item(branch=False)
+
+        result = self.run_chain()
+
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("gc.build.handoff_branch is not recorded on root", result.stderr)
+        self.assertEqual(self.fx.gh_calls(), [])
+
+    def test_item_that_does_not_publish_needs_no_keys(self) -> None:
+        self.item(keys=False, push="false", open_pr="false")
+        self.fx.pulls([])
+        self.fx.commit_pulls(None)
+
+        result = self.run_chain()
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("handoff-commit-ancestor: skipped: no publishing intent", result.stdout)
 
 
 if __name__ == "__main__":
