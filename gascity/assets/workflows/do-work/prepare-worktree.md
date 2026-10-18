@@ -54,6 +54,27 @@ setup only. Do not edit source files in the launcher checkout.
    - Create the worktree detached at the freshly fetched tip:
      `git worktree add "$WORKTREE" --detach "origin/$DEFAULT_BRANCH"`.
    If the path exists but is not the worktree for this repository, fail closed.
+   `git worktree add` copies only tracked files, so the new worktree has no
+   installed dependencies (no `node_modules`, no `.env`); the implement step's
+   preflight then fails with `command not found` (gcas-8sm0r4b: `eslint: command
+   not found`, 8 minutes lost). So provision them here, in the worktree, whether
+   the path was just created or reused (the target is idempotent). Run the rig's
+   worktree dependency target when one exists:
+
+   ```sh
+   cd "$WORKTREE"
+   if make -n worktree-deps >/dev/null 2>&1; then
+     make worktree-deps; DEPS_RC=$?
+   else
+     DEPS_RC=skipped   # the rig defines no worktree-deps target
+   fi
+   ```
+
+   Record the result in the step summary (`worktree-deps: skipped` or
+   `worktree-deps: exit <code>`). If the target exists and exits non-zero,
+   fail this step with `gc.outcome=fail` and a `gc.failure_reason` that names
+   `make worktree-deps` and its exit code; do not carry on to a worktree the
+   implement step cannot build in. A rig with no such target is not a failure.
 5. Persist the absolute path on the source anchor with
    `gc bd update <source-anchor-id> --set-metadata work_dir=<absolute worktree path>`.
    For synthetic drain-unit convoys, never persist `work_dir` on the synthetic drain-unit convoy; the original drain member/source anchor is authoritative.
