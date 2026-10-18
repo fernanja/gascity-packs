@@ -7,6 +7,45 @@ when the workflow marker, repo/base, authenticated author, and requested mode
 are compatible. If a matching marker belongs to another author, record
 `foreign_pr_exists` and ask the human how to proceed. V0 never merges.
 
+**Ready gate (gc-0b5dqe, same hazard as gc-zb2a13).** `ready` never means
+"open the pull request ready". The build's earlier pushes are `[skip ci]`
+checkpoints, so a branch head can carry no workflow run at all, and a pull
+request opened ready on such a head has zero check runs, its required contexts
+stay pending forever and its merge state stays BLOCKED
+(`fernanja/ascent_app#2786`). For both modes, open or update the pull request as
+a **draft** first, then:
+
+1. Resolve the head sha the pull request points at (`gh pr view <number> --json headRefOid`)
+   and confirm it equals the branch tip you published.
+2. The head commit's message carries no skip-CI tag: `git log -1 --format=%B <sha>`
+   (subject AND body) has none of `[skip ci]`, `[ci skip]`, `[no ci]`,
+   `[skip actions]`, `[actions skip]`. The pull request title and body carry none
+   either (the repository squashes with them, so a tag would skip the default
+   branch's push workflows).
+3. At least one workflow run exists for that sha:
+   `gh run list --commit <sha> --json databaseId,event,status,conclusion --limit 10`
+   is not empty. When the head is tagged or has zero runs (and the repository
+   has workflows: `gh api repos/<owner>/<repo>/actions/workflows --jq .total_count`
+   is not 0), put ONE empty commit on top of it in your own scratch worktree,
+   `git commit --allow-empty -m "chore: run CI (<workflow-root-id>)"`, push it
+   (the tree must not change: `git diff --quiet <sha> <tip>`), and use the new
+   tip as the head. Never more than one such commit per publish; if the new tip
+   still shows no run after the wait, fail the step (`gc.failure_class=hard`).
+4. Wait for CI on the head (`gh pr checks <number> --watch --interval 30`, time
+   bounded), then judge it with the pinned gate script in manual mode:
+   `assets/scripts/checks/pr-ci-green.sh --repo <owner>/<repo> --pr <number> --commit <sha>`.
+5. Only when it printed `PASS` for the pull request's current head, and
+   `pr_mode` is `ready`, run `gh pr ready <number>`. "No failures", "no checks
+   reported" and a judge that was not run are not green. `pr_mode=draft` stops
+   at the draft. A pull request already found open and ready on a head without
+   `PASS` is a defect to repair now: `gh pr ready <number> --undo`, then run
+   this gate again. On a red required check leave the pull request a draft and
+   record the failing check names and URLs on the workflow root; do not rerun CI
+   blind.
+
+The one exception is the judge's own `Skip` for a repository with no workflows
+at all; name it in the close reason.
+
 When `foreign_pr_exists` applies, use the passive wait + mail human gate
 pattern before mutating GitHub. This is not a timeout-driven task.
 

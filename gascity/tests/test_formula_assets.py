@@ -3175,6 +3175,31 @@ class FormulaAssetTests(unittest.TestCase):
                 self.assertIn("gc-zb2a13", text)
                 self.assertIn(fragment, text)
 
+    def test_github_issue_fix_publish_pr_gates_ready_on_ci_runs(self) -> None:
+        # gc-0b5dqe: same hazard as gc-zb2a13 / fernanja/ascent_app#2786. With
+        # pr_mode=ready the publish-pr step must not open the PR ready on a
+        # `[skip ci]` head: draft first, a run must exist, PASS before ready.
+        root = pathlib.Path(__file__).resolve().parents[1]
+        for formula_name in ("github-issue-fix-base", "github-issue-fix"):
+            steps = {step["id"]: step for step in resolve_formula(root, formula_name)["steps"]}
+            text = " ".join(node_description(root, steps["publish-pr"]).split())
+            for fragment in (
+                "**Ready gate (gc-0b5dqe, same hazard as gc-zb2a13).**",
+                'never means "open the pull request ready"',
+                "as a **draft** first",
+                "`git log -1 --format=%B <sha>` (subject AND body)",
+                "`gh run list --commit <sha> --json databaseId,event,status,conclusion --limit 10`",
+                'git commit --allow-empty -m "chore: run CI (<workflow-root-id>)"',
+                "Never more than one such commit per publish",
+                "assets/scripts/checks/pr-ci-green.sh --repo <owner>/<repo> --pr <number> --commit <sha>",
+                "Only when it printed `PASS` for the pull request's current head",
+                "`gh pr ready <number> --undo`",
+            ):
+                with self.subTest(formula=formula_name, fragment=fragment):
+                    self.assertIn(fragment, text)
+            self.assertLess(text.index("as a **draft** first"), text.index("Only when it printed `PASS`"))
+            self.assertLess(text.index("**Ready gate (gc-0b5dqe"), text.index("When `foreign_pr_exists` applies"))
+
     # gc-50j4j (R13 retro): build-from-plan and build-basic have no shared
     # plan/plan-review/decompose/repair file (each overrides its own), so the
     # same prose lives in each rendered copy; implementation prose is shared
