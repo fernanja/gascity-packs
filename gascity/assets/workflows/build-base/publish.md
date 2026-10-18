@@ -22,6 +22,12 @@ request. Publish runs after `review` approved and `finalize` passed, and it:
    hands the build back to the fix loop for one more local round, then
    publishes again. It never retries CI blind.
 
+No-change hand-off (gc-zb2a13): when the remote branch already equals the
+approved commit, "no push needed" holds only if that commit carries no skip-CI
+tag and has at least one workflow run; otherwise push the empty `chore: run CI`
+commit. The pull request is marked ready only on `PASS` for its current head
+sha, never on "no failures": zero check runs is not ready.
+
 The full protocol is in `assets/workflows/build-from-review-base/publish.md`.
 
 Required workflow root metadata:

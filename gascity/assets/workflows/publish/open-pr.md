@@ -13,3 +13,8 @@ names with their URLs on the workflow root as `gc.build.publish_ci_failures`,
 leave the PR a draft, and report the helper as failed with reason `ci_red` so
 the calling build can hand back to its fix loop for one more local round and
 publish again. Never retry CI blind.
+
+Ready gate (gc-zb2a13): `gh pr ready` runs only after `PASS` for the PR's
+current head sha. A head with a skip-CI tag or zero workflow runs
+(`gh run list --commit <sha>` is empty) has no checks: report it as failed with
+reason `no_ci_run` instead of marking the PR ready.

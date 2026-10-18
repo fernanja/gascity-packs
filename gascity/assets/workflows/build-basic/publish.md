@@ -32,7 +32,11 @@ mode, must print `PASS`), and mark it ready (`gh pr ready <number>`) on green.
 On a red required check, record the failing check names on the workflow root as
 `gc.build.publish_ci_failures`, leave the draft a draft and hand the build back
 to the fix loop for one more local round before publishing again; never retry
-CI blind. The full protocol is in
+CI blind. When the remote branch already equals the approved commit (a
+no-change hand-off), still push the empty `chore: run CI` commit if that commit
+carries a skip-CI tag or has zero workflow runs, and mark ready only on `PASS`
+for the PR's current head sha: zero check runs is not ready (gc-zb2a13). The
+full protocol is in
 `assets/workflows/build-from-review-base/publish.md`. When the build did not
 finalize approved, open nothing.
 

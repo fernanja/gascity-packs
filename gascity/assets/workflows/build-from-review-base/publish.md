@@ -48,18 +48,39 @@ right commit without checking. Follow this protocol exactly:
 2. Resolve the actual remote state with `git ls-remote origin <branch>` --
    not a locally cached ref, not a "was pushed" flag from a previous
    publish attempt. Compare its commit to `gc.build.review_subject_commit`.
-3. If they already match and the commit's message carries no skip-CI tag
-   (`git log -1 --format=%B <sha>` has none of `[skip ci]`, `[ci skip]`,
-   `[no ci]`, `[skip actions]`, `[actions skip]`), no push is needed; proceed
-   straight to PR handling (if `open_pr` is authorized). A tagged commit
-   still needs the push in step 4: GitHub runs no CI for it.
+3. If they already match, no push is needed ONLY when both of these hold; this
+   is the no-change hand-off case (a fix loop that approved the existing head
+   with no new commit, so the remote already equals the approved commit) and it
+   is the case that shipped `fernanja/ascent_app#2786` ready with zero CI runs
+   (gc-zb2a13). Check both, with these commands, and quote their output in the
+   close reason; "already equals review_subject_commit" alone is never enough:
+   - the commit's message carries no skip-CI tag: `git log -1 --format=%B <sha>`
+     (subject AND body) has none of `[skip ci]`, `[ci skip]`, `[no ci]`,
+     `[skip actions]`, `[actions skip]`. Every earlier push of this branch was a
+     `[skip ci]` checkpoint, so a hand-off head that was never changed IS tagged
+     more often than not;
+   - at least one workflow run exists for that sha:
+     `gh run list --commit <sha> --json databaseId,event,status,conclusion --limit 10`
+     is not empty. When it is empty, check `gh api repos/<owner>/<repo>/actions/workflows --jq .total_count`:
+     a repository with no workflows at all has nothing to wait for (the gate
+     script in the judge step reports that itself); any other repository has
+     CI that never ran on this head (zero runs).
+   When both hold, proceed straight to PR handling (if `open_pr` is authorized).
+   When the tag is present or the head has zero runs, a push is still needed:
+   take step 4's empty-commit path. GitHub runs no CI for a tagged commit, and a
+   head with no runs has no checks to turn the pull request ready on.
 4. Otherwise fast-forward push `gc.build.review_subject_commit` to `<branch>`
    on `origin`, **without a skip-CI tag** (reviewer-first, gc-gef2p8:
    every earlier push of this branch was a `[skip ci]` checkpoint, and this is
    the push that runs CI, once, on the commit the reviewer approved). When the
    commit's own message carries a skip-CI tag, put an empty commit on top of
    it first, in the scratch worktree below:
-   `git commit --allow-empty -m "chore: run CI"`, and push that. The tree of
+   `git commit --allow-empty -m "chore: run CI"`, and push that. The same empty
+   commit is the remedy when step 3 found zero workflow runs for an untagged
+   head that the remote already holds (then the tag condition does not apply,
+   and the commit message stays untagged). Put at most ONE such commit on the
+   branch per publish: if the pushed tip still shows no run after the wait
+   below, fail (hard) rather than adding another. The tree of
    the pushed tip must equal the approved commit's tree
    (`git diff --quiet <approved> <tip>`). If the push cannot be fast-forwarded
    (rejected, diverged, or the local worktree doesn't have that commit), fail
@@ -69,8 +90,8 @@ right commit without checking. Follow this protocol exactly:
    wrong commit is worse than a blocked publish step.
 5. Only after the remote branch tip is confirmed to be
    `gc.build.review_subject_commit` or that commit plus the one empty
-   `chore: run CI` commit (whether by matching already or by a push that just
-   succeeded) may a PR be opened. Record the sha that is now actually at the
+   `chore: run CI` commit (whether by matching already, with the step 3 checks
+   passed, or by a push that just succeeded) may a PR be opened. Record the sha that is now actually at the
    branch tip as `gc.build.publish_pushed_commit` on the workflow root before
    closing -- this is the sha a PR title/body may truthfully claim as
    published and the sha CI runs on.
@@ -150,6 +171,19 @@ shapes GitHub returns (never parse `statusCheckRollup` by hand):
 3. On `PASS`: mark the pull request ready, `gh pr ready <number>`, record the
    PR URL, the pushed sha and the `PASS` line on the workflow root and this
    step, and close `gc.outcome=pass`.
+   **Ready gate (gc-zb2a13).** Run `gh pr ready` only after the judge printed
+   `PASS` for the sha that is the pull request's head right now, on every path
+   through this step including the one where step 3 above found nothing to push.
+   Before the command, read `gh pr view <number> --json headRefOid` and confirm
+   it equals `gc.build.publish_pushed_commit`, and confirm
+   `gh run list --commit <gc.build.publish_pushed_commit> --json databaseId --limit 1`
+   is not empty. "No failures", "no checks reported", a branch with zero
+   workflow runs, or a judge that was not run at all are not green: a pull
+   request with zero check runs is never ready (its required contexts stay
+   pending forever and the merge state stays BLOCKED). The one exception is the
+   judge's own `Skip` for a repository that has no workflows at all; name it in
+   the close reason. A pull request opened ready is a defect to repair now:
+   `gh pr ready <number> --undo`, then run this protocol again.
 4. On a red required check, never retry CI blind (no `gh run rerun` of a
    failed required check unless the log shows CI's own machinery died, and
    then once, recording the run URL). Leave the PR a draft.

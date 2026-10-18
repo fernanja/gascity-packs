@@ -20,5 +20,9 @@ required check on the head sha (`pr-ci-green.sh --repo <owner>/<repo> --pr <n>
 (`gh pr ready <number>`) on green. A red required check is reported, not
 retried: record the failing check names on the workflow root as
 `gc.build.publish_ci_failures`, leave the draft a draft and close this step
-`gc.outcome=fail`, `gc.failure_class=hard`. If neither push nor open_pr is an
+`gc.outcome=fail`, `gc.failure_class=hard`. When the remote branch already
+holds the commit being published, push is still required if that commit
+carries a skip-CI tag or has zero workflow runs (`gh run list --commit <sha>`);
+never mark ready on "no failures", only on `PASS` for the PR's current head
+sha (gc-zb2a13). If neither push nor open_pr is an
 explicit opt-in, close with `gc.outcome=pass` without mutating remotes.

@@ -3130,6 +3130,46 @@ class FormulaAssetTests(unittest.TestCase):
         publish_step = {step["id"]: step for step in load_formula(root, "build-base")["steps"]}["publish"]
         self.assertEqual(publish_step["needs"], ["finalize"])
 
+    def test_publish_no_push_branch_still_runs_ci_and_gates_ready_on_runs(self) -> None:
+        # gc-zb2a13: fernanja/ascent_app#2786 was opened and marked ready at a
+        # `[skip ci]` head the remote already held (fix loop approved with no new
+        # commit). The no-push branch skipped the run-CI commit and the checks
+        # wait, so the PR had zero check runs and stayed BLOCKED forever.
+        root = pathlib.Path(__file__).resolve().parents[1]
+        for formula_name in ("build-from-plan", "build-from-decompose", "build-from-review"):
+            text = " ".join(rendered_step_text(root, formula_name, "publish").split())
+            for fragment in (
+                # No-change hand-off: matching remote is not enough on its own.
+                "this is the no-change hand-off case",
+                '"already equals review_subject_commit" alone is never enough',
+                "`git log -1 --format=%B <sha>` (subject AND body)",
+                "`gh run list --commit <sha> --json databaseId,event,status,conclusion --limit 10`",
+                "When the tag is present or the head has zero runs, a push is still needed",
+                # Zero-runs case: the untagged head the remote holds.
+                "The same empty commit is the remedy when step 3 found zero workflow runs",
+                "Put at most ONE such commit on the branch per publish",
+                # Ready gate: PASS for the current head, never "no failures".
+                "**Ready gate (gc-zb2a13).**",
+                "`gh pr view <number> --json headRefOid`",
+                "a pull request with zero check runs is never ready",
+                "`gh pr ready <number> --undo`",
+            ):
+                with self.subTest(formula=formula_name, fragment=fragment):
+                    self.assertIn(fragment, text)
+            self.assertLess(text.index("this is the no-change hand-off case"), text.index("4. Otherwise fast-forward push"))
+            self.assertLess(text.index("**Ready gate (gc-zb2a13).**"), text.index("On a red required check, never retry CI blind"))
+        for doc, fragment in (
+            ("build-base/publish.md", "No-change hand-off (gc-zb2a13)"),
+            ("build-basic/publish.md", "no-change hand-off"),
+            ("implement/publish.md", "has zero workflow runs"),
+            ("publish/open-pr.md", "Ready gate (gc-zb2a13)"),
+            ("publish/push.md", "zero workflow runs"),
+        ):
+            with self.subTest(doc=doc):
+                text = " ".join((root / "assets" / "workflows" / doc).read_text(encoding="utf-8").split())
+                self.assertIn("gc-zb2a13", text)
+                self.assertIn(fragment, text)
+
     # gc-50j4j (R13 retro): build-from-plan and build-basic have no shared
     # plan/plan-review/decompose/repair file (each overrides its own), so the
     # same prose lives in each rendered copy; implementation prose is shared
