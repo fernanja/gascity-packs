@@ -153,8 +153,15 @@ if [ "$PUSH" = "true" ] && [ "$OPEN_PR" = "true" ]; then
 
   # (b) The checkpoint push must have happened. Fetch it fresh: the local
   # remote-tracking ref says what this clone last saw, not what origin holds.
+  # The controller runs this gate without GitHub credentials (gc-gef2p8 follow-up, 2026-10-18):
+  # the fetch is a best-effort refresh. The worker's checkpoint push already updated the
+  # shared repository's remote-tracking ref, so fall back to it when the fetch cannot run.
   if ! FETCH_OUT="$(run_bounded git -C "$REPO" fetch --quiet origin "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH" 2>&1)"; then
-    fail "checkpoint not on origin: git fetch origin $BRANCH failed ($(printf '%s' "$FETCH_OUT" | tr '\n' ' ' | head -c 160)). Push $BRANCH once (fast-forward) before closing"
+    if git -C "$REPO" rev-parse --verify --quiet "refs/remotes/origin/$BRANCH" >/dev/null 2>&1; then
+      echo "handoff-commit-ancestor: fetch of origin/$BRANCH failed ($(printf '%s' "$FETCH_OUT" | tr '\n' ' ' | head -c 120)); using the existing remote-tracking ref" >&2
+    else
+      fail "checkpoint not on origin: git fetch origin $BRANCH failed ($(printf '%s' "$FETCH_OUT" | tr '\n' ' ' | head -c 160)) and no remote-tracking ref exists. Push $BRANCH once (fast-forward) before closing"
+    fi
   fi
   if ! git -C "$REPO" merge-base --is-ancestor "$COMMIT" "refs/remotes/origin/$BRANCH"; then
     fail "checkpoint not on origin: ${COMMIT:0:12} is not in origin/$BRANCH. Make the one checkpoint push (git push origin $BRANCH) before closing"
