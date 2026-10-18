@@ -25,6 +25,36 @@ real-server suites against the available seeded stack. Test evidence is these
 runs plus the worker's preflight record. Concrete formulas carry the full
 procedure; see `build-from-review-base/review.md`.
 
+**Live-suite failures that are not findings (gc-aecuvz).** A full-suite run
+meets a live host, so classify each failing test before raising it, and record
+every command and exit code you use. Three classes:
+
+1. Touched module: the failing spec, or the code it exercises, is in
+   `git diff --name-only $(git merge-base origin/<base-branch> HEAD) HEAD`.
+   It blocks, as before: a required finding. The flake-log rule for a touched
+   module is unchanged (a one-off failure that does not reproduce on an
+   immediate retry is logged; one that reproduces is fixed in the build).
+2. Environment failure: ALL of these hold. The module is not touched by the
+   branch. The error is a Chromium network-stack code
+   (`net::ERR_INTERNET_DISCONNECTED`, `ERR_NAME_NOT_RESOLVED`,
+   `ERR_CONNECTION_*`, `ERR_NETWORK_CHANGED`) or a timeout fetching a
+   third-party origin. After you confirm the host resolves
+   `cdnjs.cloudflare.com` (`python3 -c 'import socket; print(socket.gethostbyname("cdnjs.cloudflare.com"))'`),
+   one immediate retry of that test passes. List it under a
+   `Permitted/environment` heading in the Verification section (test id,
+   error code, retry command, retry exit code). It is not a finding and does
+   not change the verdict. If the retry fails too, it is class 3 or class 1.
+3. Pre-existing: a reproducible failure in an untouched module that is not
+   class 2. Run the same test on a detached worktree of `origin/<base-branch>`.
+   When it fails there too, file one bead for it (`gc bd create`, with the test
+   id, the error, and both commands and exit codes) and list it under a
+   `Pre-existing` heading in the Verification section with the bead id. It is
+   not a finding against this branch. When it passes on the base branch, the
+   branch causes it: a required finding.
+
+Never use classes 2 and 3 for a touched module, for a first failure you did
+not retry, or for a timeout against the rig's own server.
+
 Where to work (gc-mpaqx): in your own detached worktree of the commit under
 review, never in the implementation worktree. That worktree belongs to a
 closed bead and the engine can remove it between two of your commands, so

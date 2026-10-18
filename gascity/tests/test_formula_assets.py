@@ -3391,6 +3391,62 @@ class FormulaAssetTests(unittest.TestCase):
                 text = effective_formula_text(root, formula)
                 self.assertIn(preflight_instruction_core, text)
 
+    # gc-aecuvz: five fix loops on one build were triggered by the required
+    # live suite surfacing failures in modules the branch never touched (a
+    # pre-existing 500, a pre-existing locator defect, a host network loss).
+    # The classification block lives in each review prose file (step markdown
+    # has no include mechanism, see the preflight test above); this keeps the
+    # copies identical and checks the rules that matter.
+    LIVE_SUITE_START = "**Live-suite failures that are not findings (gc-aecuvz).**"
+    LIVE_SUITE_END = "for a timeout against the rig's own server."
+
+    def test_live_suite_failure_classification_stays_synchronized(self) -> None:
+        root = pathlib.Path(__file__).resolve().parents[1]
+        canonical = (root / "assets/workflows/build-from-review-base/review.md").read_text(encoding="utf-8")
+        start = canonical.index(self.LIVE_SUITE_START)
+        end = canonical.index(self.LIVE_SUITE_END, start) + len(self.LIVE_SUITE_END)
+        block = self._flat(canonical[start:end])
+        for fragment in (
+            "git diff --name-only $(git merge-base origin/<base-branch> HEAD) HEAD",
+            "It blocks, as before: a required finding.",
+            "net::ERR_INTERNET_DISCONNECTED",
+            "`ERR_NAME_NOT_RESOLVED`",
+            "`ERR_CONNECTION_*`",
+            "`ERR_NETWORK_CHANGED`",
+            "a timeout fetching a third-party origin",
+            "cdnjs.cloudflare.com",
+            "one immediate retry of that test passes",
+            "`Permitted/environment` heading",
+            "It is not a finding and does not change the verdict.",
+            "detached worktree of `origin/<base-branch>`",
+            "file one bead for it",
+            "`Pre-existing` heading",
+            "The flake-log rule for a touched module is unchanged",
+            "Never use classes 2 and 3 for a touched module",
+        ):
+            with self.subTest(fragment=fragment):
+                self.assertIn(fragment, block)
+        for formula in ("build-base", "build-from-review-base", "fix-loop-base", "review"):
+            with self.subTest(formula=formula):
+                self.assertIn(block, self._flat(effective_formula_text(root, formula)))
+
+    def test_repair_decision_and_fix_plan_skip_unblocking_live_suite_items(self) -> None:
+        root = pathlib.Path(__file__).resolve().parents[1]
+        decide = self._flat(
+            (root / "assets/workflows/build-from-review-base/decide-repair.md").read_text(encoding="utf-8")
+        )
+        for fragment in (
+            "Environment and pre-existing items are not findings (gc-aecuvz).",
+            "`Permitted/environment` or `Pre-existing` headings",
+            "do not make it `changes_required` and do not earn another loop",
+            "An item that lacks that evidence is an unresolved finding.",
+            "A failure in a module the branch changed is never reclassified here.",
+        ):
+            with self.subTest(step="decide-repair", fragment=fragment):
+                self.assertIn(fragment, decide)
+        plan = self._flat((root / "assets/workflows/fix-loop-base/plan-fixes.md").read_text(encoding="utf-8"))
+        self.assertIn("Do not plan a fix for an item the review lists under `Permitted/environment` or `Pre-existing`", plan)
+
     # gc-mpaqx: review runs after the work-item bead has closed, and the
     # engine's reapClosedBeadWorktrees removes a closed bead's worktree under
     # .gc/worktrees/<rig>/ once it is clean and no process holds it -- the

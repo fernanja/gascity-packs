@@ -20,6 +20,8 @@ Plan each fix at the level of the mechanism, not the instance the review named.
   finding is a narrower version of an earlier one, the earlier approach has
   failed: do not refine it again. Change the approach, and say in the plan what
   was wrong with the previous one.
+- Do not plan a fix for an item the review lists under `Permitted/environment`
+  or `Pre-existing`: those are not findings (gc-aecuvz). Plan only the findings.
 - List what the fix deliberately does not cover, so the re-review can judge
   that boundary instead of discovering it.
 

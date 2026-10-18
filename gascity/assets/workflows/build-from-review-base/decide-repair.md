@@ -126,6 +126,16 @@ fresh `git rev-parse HEAD` as `gc.build.review_subject_commit`, so publish
 pushes the final HEAD. A diff that changes code or test behaviour always gets
 a real re-review; this rule never skips one.
 
+**Environment and pre-existing items are not findings (gc-aecuvz).** When the
+most recent re-review lists live-suite failures only under its
+`Permitted/environment` or `Pre-existing` headings (see "Live-suite failures
+that are not findings" in `review.md`), they do not make it `changes_required`
+and do not earn another loop. Check each listed item once: an environment item
+names its retry command with exit code 0; a pre-existing item names a bead id
+and the same test failing on the base branch. An item that lacks that evidence
+is an unresolved finding. A failure in a module the branch changed is never
+reclassified here.
+
 A repair for an intermittent or timing failure must show the pre-fix code
 failing and the post-fix code passing under the same reproduction method. When
 the review is `blocked` for `cannot_reproduce`, or a repair pass cannot make
