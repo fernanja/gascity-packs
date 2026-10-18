@@ -50,14 +50,19 @@ on the shared repository before you record anything: the sha exists
 (`git cat-file -e <sha>^{commit}`), is an ancestor of the branch head
 (`git merge-base --is-ancestor <sha> origin/<branch>`, after `git fetch origin
 <branch>`), carries a `[skip ci]` tag, and the branch is not the default
-branch. Record the derived pair on the item root AND on the workflow root,
+branch. Record the full 40-character sha (`git rev-parse <sha>^{commit}`),
+never an abbreviated sha copied from the text. When the text names the branch
+but no sha, use the branch head on origin (`git rev-parse origin/<branch>`)
+only when that commit carries the `[skip ci]` tag; otherwise the sha is
+underivable. Record the derived pair on the item root AND on the workflow root,
 and say in the summary's Verification section which items you derived, from
 which text, and which checks passed:
 
 `gc bd update "<item-root-id>" --set-metadata "gc.build.handoff_commit=<sha>" --set-metadata "gc.build.handoff_branch=<branch>"`
 
 Fail only when nothing can be derived (no sha and no branch in the close reason
-or the summary, or a derived pair that fails a check): close this step as a hard
+or the summary, a branch whose origin head carries no `[skip ci]` tag, or a
+derived pair that fails a check): close this step as a hard
 failure with `gc.failure_class=hard` and a `gc.failure_reason` that names the
 item root and what was missing.
 
