@@ -3054,7 +3054,7 @@ class FormulaAssetTests(unittest.TestCase):
                 # BEHAVIOR-4: the one push that runs CI.
                 "**without a skip-CI tag** (reviewer-first, gc-gef2p8",
                 "`[skip ci]`, `[ci skip]`, `[no ci]`, `[skip actions]`, `[actions skip]`",
-                'put an empty commit on top of it first, in the scratch worktree below: `git commit --allow-empty -m "chore: run CI"`',
+                'put an empty commit on top of it first, in the scratch worktree below: `git commit --allow-empty -m "chore: run CI (<source-bead-id>)"`',
                 "`git diff --quiet <approved> <tip>`",
                 "**This step runs CI, once (reviewer-first, gc-gef2p8).**",
                 "`gh pr list --head <branch> --state open --json number,isDraft,headRefOid,url`",
