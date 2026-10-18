@@ -146,6 +146,47 @@ the pre-fix code fail, do not guess-fix: record the evidence gathered in the
 repair summary and the blocked outcome below (a reproduction method is the
 missing prerequisite), with `gc.restart.reason=cannot_reproduce`.
 
+**Probe the environment before launching (gc-vth8v4).** A loop launched into
+an environment that is still broken burns three attempts and a run-operator
+claim on the same blocker (2026-10-18: new fix loops kept launching while the
+Docker API did not answer, every probe from 16:43Z on). Before the `gc sling`
+below, read what stopped the previous loop: the `gc.failure_reason` and close
+reason of the loop root and of its last step beads, the last re-review's
+blocked reason and `Permitted/environment` items, and the journal. When any
+of them names an environment blocker, run its matching cheap probe from the
+launcher rig root, each bounded so it returns by itself:
+
+- Docker API not answering: `timeout 20 docker info >/dev/null 2>&1; echo "exit=$?"`
+  (the rig's `scripts/docker_ready.sh`, when it has one, is the same probe);
+- host disk full: `df -Pk "$HOME" | awk 'NR==2 {print $4 / 1048576 " GiB free"}'`,
+  failing under 10 GiB;
+- dev server or service port unreachable: `nc -z -w 5 <host> <port>; echo "exit=$?"`.
+
+A passing probe changes nothing: launch. A failing probe means the blocker is
+still present, so do NOT launch and do not count an attempt (no loop ran).
+Defer instead, in this order:
+
+1. On the workflow root record the reason and the time:
+   `gc bd update "<workflow-root-id>" --set-metadata "gc.build.repair_deferred=repair deferred: <blocker> still present at <UTC time from date -u>"`,
+   and append the same line to the journal. Leave `gc.build.repair_status`
+   as it is.
+2. Mail the mayor once per 6 hours, not once per claim: read
+   `gc.build.repair_deferred_mailed_at` on the workflow root; send only when
+   it is absent or more than 6 hours old, with
+   `gc mail send mayor -s "repair deferred: <blocker>" -m "<root id>, probe command and exit code, time"`,
+   then set that key to the send time in the same `gc bd update` as step 1.
+3. Keep this step open and hide it from the queue for a while, so the next
+   claim is a re-probe and not an immediate re-claim of the same blocker:
+   `gc bd update "<claimed-step-id>" --defer +30m
+   --set-metadata "gc.session_affinity=" --set-metadata "gc.continuation_group="`,
+   then `gc bd release-if-current "<claimed-step-id>" "<assignee>"` (the
+   assignee exactly as `gc bd show "<claimed-step-id>" --json` prints it;
+   `skipped` means the bead was not yours, so stop and report). Do not close
+   the step, do not park it with `gc session wait`, and do not poll.
+
+The claim after the deferral runs the probe again. When it passes, clear
+`gc.build.repair_deferred` with `--unset-metadata` and launch as below.
+
 **The next attempt.** When the most recent re-review's verdict is
 `changes_required` (and not wording-only, above) and the attempts made so far
 — the loops the journal records — are fewer than max_iterations, launch the

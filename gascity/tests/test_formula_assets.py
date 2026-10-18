@@ -2589,7 +2589,7 @@ class FormulaAssetTests(unittest.TestCase):
                     self.assertIn(fragment, decide)
                 # The edge lands before the release: a released step whose
                 # blockers are all closed is claimed again immediately.
-                self.assertLess(decide.index(edge), decide.index(release))
+                self.assertIn(release, decide[decide.index(edge):])
                 for stale in (
                     'gc session wait "$SESSION_TARGET"',
                     "--on-beads",
@@ -2599,6 +2599,37 @@ class FormulaAssetTests(unittest.TestCase):
                 ):
                     self.assertNotIn(stale, decide)
                 self.assertNotIn("gc hook", decide)
+
+    def test_fix_loop_launch_probes_the_environment_blocker_before_relaunching(self) -> None:
+        # gc-vth8v4 (2026-10-18 Docker outage): decide-repair kept launching
+        # fix loops while every Docker probe timed out, burning worker claims
+        # and attempt budgets. Both launch points probe the blocker the
+        # previous loop named, and a failing probe defers instead of launching.
+        root = pathlib.Path(__file__).resolve().parents[1]
+        for formula in ("build-from-plan", "build-from-decompose", "build-from-convoy", "build-from-review"):
+            for step in ("repair-review", "decide-repair"):
+                text = rendered_step_text(root, formula, step)
+                flat = " ".join(text.split())
+                with self.subTest(formula=formula, step=step):
+                    for fragment in (
+                        "Probe the environment before launching (gc-vth8v4)",
+                        "timeout 20 docker info",
+                        "df -Pk",
+                        "nc -z -w 5",
+                        "do NOT launch and do not count an attempt",
+                        "gc.build.repair_deferred=repair deferred: <blocker> still present at <UTC time",
+                        "once per 6 hours",
+                        "gc.build.repair_deferred_mailed_at",
+                        "--defer +30m",
+                        'gc bd release-if-current "<claimed-step-id>" "<assignee>"',
+                        "Do not close the step, do not park it with `gc session wait`",
+                    ):
+                        self.assertIn(fragment, flat)
+                    probe = flat.index("Probe the environment before launching")
+                    self.assertLess(probe, flat.index("gc sling"))
+                    # Deferral records the reason before it releases the claim.
+                    self.assertLess(flat.index("gc.build.repair_deferred=repair deferred"), flat.index("--defer +30m"))
+                    self.assertLess(flat.index("--defer +30m"), flat.index("release-if-current", flat.index("--defer +30m")))
 
     def test_finalize_records_a_blocked_build_once(self) -> None:
         # gc-2ua7i: finalize was told to close its own bead gc.outcome=fail
