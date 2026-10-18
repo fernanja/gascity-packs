@@ -5541,8 +5541,9 @@ class FormulaAssetTests(unittest.TestCase):
             "make -n worktree-deps",
             "make worktree-deps",
             "worktree-deps: exit <code>",
-            "fail this step with `gc.outcome=fail`",
-            "A rig with no such target is not a failure",
+            "`gc.outcome=fail`, `gc.failure_class=hard`, and a `gc.failure_reason`",
+            "sleep 30; make worktree-deps; DEPS_RC=$?",
+            "Makefile at all (`make -n` exits non-zero either way), is not a failure",
         ):
             with self.subTest(step="prepare-worktree", fragment=fragment):
                 self.assertIn(fragment, prepare)

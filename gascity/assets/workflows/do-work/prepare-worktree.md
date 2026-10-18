@@ -65,16 +65,20 @@ setup only. Do not edit source files in the launcher checkout.
    cd "$WORKTREE"
    if make -n worktree-deps >/dev/null 2>&1; then
      make worktree-deps; DEPS_RC=$?
+     # One retry: dependency installs fail transiently (registry, network).
+     if [ "$DEPS_RC" != 0 ]; then sleep 30; make worktree-deps; DEPS_RC=$?; fi
    else
      DEPS_RC=skipped   # the rig defines no worktree-deps target
    fi
    ```
 
    Record the result in the step summary (`worktree-deps: skipped` or
-   `worktree-deps: exit <code>`). If the target exists and exits non-zero,
-   fail this step with `gc.outcome=fail` and a `gc.failure_reason` that names
-   `make worktree-deps` and its exit code; do not carry on to a worktree the
-   implement step cannot build in. A rig with no such target is not a failure.
+   `worktree-deps: exit <code>`, and whether the retry ran). If the target
+   exists and still exits non-zero after the retry, fail this step with
+   `gc.outcome=fail`, `gc.failure_class=hard`, and a `gc.failure_reason` that
+   names `make worktree-deps` and its exit code; do not carry on to a worktree
+   the implement step cannot build in. A rig with no such target, or no
+   Makefile at all (`make -n` exits non-zero either way), is not a failure.
 5. Persist the absolute path on the source anchor with
    `gc bd update <source-anchor-id> --set-metadata work_dir=<absolute worktree path>`.
    For synthetic drain-unit convoys, never persist `work_dir` on the synthetic drain-unit convoy; the original drain member/source anchor is authoritative.
