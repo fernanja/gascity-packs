@@ -3153,11 +3153,16 @@ class FormulaAssetTests(unittest.TestCase):
                 "`gh pr view <number> --json headRefOid`",
                 "a pull request with zero check runs is never ready",
                 "`gh pr ready <number> --undo`",
+                # Hazard 1: the squash uses the PR title and body.
+                "carry none of the skip tags",
+                "chore: run CI (<source-bead-id>)",
             ):
                 with self.subTest(formula=formula_name, fragment=fragment):
                     self.assertIn(fragment, text)
             self.assertLess(text.index("this is the no-change hand-off case"), text.index("4. Otherwise fast-forward push"))
             self.assertLess(text.index("**Ready gate (gc-zb2a13).**"), text.index("On a red required check, never retry CI blind"))
+            # The run-list check (and the judge it feeds) comes before the ready gate.
+            self.assertLess(text.index("`gh run list --commit"), text.index("**Ready gate (gc-zb2a13).**"))
         for doc, fragment in (
             ("build-base/publish.md", "No-change hand-off (gc-zb2a13)"),
             ("build-basic/publish.md", "no-change hand-off"),

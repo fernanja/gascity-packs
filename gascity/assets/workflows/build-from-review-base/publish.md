@@ -75,7 +75,7 @@ right commit without checking. Follow this protocol exactly:
    the push that runs CI, once, on the commit the reviewer approved). When the
    commit's own message carries a skip-CI tag, put an empty commit on top of
    it first, in the scratch worktree below:
-   `git commit --allow-empty -m "chore: run CI"`, and push that. The same empty
+   `git commit --allow-empty -m "chore: run CI (<source-bead-id>)"`, and push that. The same empty
    commit is the remedy when step 3 found zero workflow runs for an untagged
    head that the remote already holds (then the tag condition does not apply,
    and the commit message stays untagged). Put at most ONE such commit on the
@@ -112,7 +112,12 @@ confirmed the remote branch tip, look for one:
 
 - No open pull request: open one as a **draft** against the default branch,
   with the source bead id in the title (the bead this build was dispatched
-  for) and the sanitized body from the final report:
+  for) and the sanitized body from the final report. Sanitized means the title
+  and the body carry none of the skip tags (`[skip ci]`, `[ci skip]`,
+  `[no ci]`, `[skip actions]`, `[actions skip]`): the repository squashes with
+  the pull request title and body, so a tag there would reach the default
+  branch's squash commit and skip its push workflows, deploy included
+  (gc-zb2a13):
   `gh pr create --draft --base <default-branch> --head <branch> --title "<what changed> (<source-bead-id>)" --body-file <file>`.
   Never open it ready: a merge sweep merges any clean non-draft pull request,
   and it must not be merged before its checks are green.
