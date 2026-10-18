@@ -28,6 +28,23 @@ read the requirements, decomposition, review context, and verification evidence
 before writing the canonical root summary. The canonical summary must cover all
 accepted requirement IDs that the build finalized.
 
+Bridge the hand-off from the items to the build root (reviewer-first,
+gc-gef2p8). Each implementation item records the commit it hands over as
+`gc.build.handoff_commit` and `gc.build.handoff_branch` on its own item root;
+the review reads them from the build root, so this step is the writer. Read
+both keys from each implementation item's root, in the drain order (the order
+the items ran, which the implementation convoy lists). Record the values of the
+LAST item (the last item's head contains every earlier item's commits) on the
+workflow root under the same keys, plus `gc.build.handoff_items`, the ordered
+item root ids, comma-separated:
+
+`gc bd update "<workflow-root-id>" --set-metadata "gc.build.handoff_commit=<last item's commit>" --set-metadata "gc.build.handoff_branch=<last item's branch>" --set-metadata "gc.build.handoff_items=<item-root-1>,<item-root-2>"`
+
+When no item recorded a hand-off (a workflow that does not publish), write
+nothing and say so in the summary's Verification section. When the items name
+different branches, do not guess: say so in Remaining Risks and record the last
+item's pair anyway, because the review will check the commit it reads out.
+
 Write the artifact as Markdown with YAML front matter, not JSON. Use mapping objects for front matter; do not use scalar shortcuts such as
 `workflow: build-basic`. The top-level YAML shape must be:
 

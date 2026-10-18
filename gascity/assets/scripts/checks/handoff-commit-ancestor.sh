@@ -12,7 +12,9 @@ set -euo pipefail
 #
 # Same conventions as pr-ci-green.sh: reads $GC_BEAD_ID, resolves the workflow
 # root through gc.root_bead_id, prints failures on stderr for gc.attempt_log,
-# never prompts, never touches the network.
+# never prompts. It touches the network only in a workflow that publishes, for
+# one bounded `git fetch origin <branch>` (and, when origin/HEAD is not set
+# locally, one bounded `git ls-remote --symref origin HEAD`); it never calls gh.
 #
 # Workflow-root metadata it reads:
 #   gc.build.handoff_commit    - the commit handed to the re-review
@@ -22,10 +24,21 @@ set -euo pipefail
 #   gc.work_dir                - the launcher rig root; falls back to
 #                                $GC_WORK_DIR, $GC_STORE_PATH, then $PWD
 #
+# When both gc.var.push and gc.var.open_pr are true, three more checks run
+# after the ancestor check, each refusing with one line that names it:
+#   skip-ci tag  - the commit message carries [skip ci], [ci skip], [no ci],
+#                  [skip actions], [actions skip] or a `skip-checks: true`
+#                  trailer, so the checkpoint push runs no CI
+#   on origin    - refs/remotes/origin/<branch> (fetched now) contains the
+#                  commit: "checkpoint not on origin"
+#   not default  - the branch is not the repository default branch
+#
 # Exit 0: the commit is on the branch (PASS), or an explicit `skipped:` when
 # the workflow does not publish and recorded nothing.
 # Exit 1: nothing recorded in a workflow that publishes, the commit is not in
-# the repository, the branch is missing, or the commit is not on the branch.
+# the repository, the branch is missing, the commit is not on the branch, or
+# (publishing workflows) the commit is untagged, not pushed, or on the default
+# branch.
 # Exit 75: no verdict (the bead store kept failing); not a failed attempt.
 #
 # Manual use: GC_BEAD_ID=<fix-pass step id> handoff-commit-ancestor.sh
@@ -35,6 +48,16 @@ PREFIX="handoff-commit-ancestor"
 say() { printf '%s: %s\n' "$PREFIX" "$*"; }
 fail() { printf '%s: FAIL %s\n' "$PREFIX" "$*" >&2; exit 1; }
 infra() { printf '%s: INFRA no verdict: %s. Nothing was learned about the commit; this is not a failed hand-off. Run the gate again when the bead store is back\n' "$PREFIX" "$*" >&2; exit 75; }
+
+# run_bounded <command>...: run with an alarm (perl is on macOS and Linux; GNU
+# timeout is not on macOS). Never prompts for credentials.
+run_bounded() {
+  if command -v perl >/dev/null 2>&1; then
+    GIT_TERMINAL_PROMPT=0 perl -e 'alarm shift; exec @ARGV or exit 127' "${HANDOFF_ANCESTOR_NETWORK_TIMEOUT_SECONDS:-60}" "$@"
+  else
+    GIT_TERMINAL_PROMPT=0 "$@"
+  fi
+}
 
 command -v python3 >/dev/null 2>&1 || fail "python3 is required on PATH"
 command -v git >/dev/null 2>&1 || fail "git is required on PATH"
@@ -109,6 +132,33 @@ done
 
 if ! git -C "$REPO" merge-base --is-ancestor "$COMMIT" "$HEAD_SHA"; then
   fail "handoff commit ${COMMIT:0:12} is not an ancestor of the head of $BRANCH (${HEAD_SHA:0:12}). Record a commit that is on the work branch, or put the commit on it"
+fi
+
+if [ "$PUSH" = "true" ] && [ "$OPEN_PR" = "true" ]; then
+  # (a) The checkpoint must not run CI: only publish does.
+  COMMIT_MESSAGE="$(git -C "$REPO" log -1 --format=%B "$COMMIT")"
+  if ! printf '%s\n' "$COMMIT_MESSAGE" | grep -Eq '\[(skip ci|ci skip|no ci|skip actions|actions skip)\]|^skip-checks: true[[:space:]]*$'; then
+    fail "head commit carries no skip-ci tag: ${COMMIT:0:12} on $BRANCH would run CI at the checkpoint push. Amend its message to carry [skip ci] (or a 'skip-checks: true' trailer), push again and re-record gc.build.handoff_commit"
+  fi
+
+  # (c) Never the default branch: a checkpoint there is a direct push to main.
+  DEFAULT_BRANCH="$(git -C "$REPO" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+  DEFAULT_BRANCH="${DEFAULT_BRANCH#origin/}"
+  if [ -z "$DEFAULT_BRANCH" ]; then
+    DEFAULT_BRANCH="$(run_bounded git -C "$REPO" ls-remote --symref origin HEAD 2>/dev/null | sed -n 's|^ref: refs/heads/\([^[:space:]]*\)[[:space:]]*HEAD$|\1|p' | head -n 1 || true)"
+  fi
+  if [ "$BRANCH" = "$DEFAULT_BRANCH" ] || { [ -z "$DEFAULT_BRANCH" ] && { [ "$BRANCH" = "main" ] || [ "$BRANCH" = "master" ]; }; }; then
+    fail "work branch '$BRANCH' is the default branch of $REPO; a checkpoint push there bypasses the pull request. Hand off from a work branch"
+  fi
+
+  # (b) The checkpoint push must have happened. Fetch it fresh: the local
+  # remote-tracking ref says what this clone last saw, not what origin holds.
+  if ! FETCH_OUT="$(run_bounded git -C "$REPO" fetch --quiet origin "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH" 2>&1)"; then
+    fail "checkpoint not on origin: git fetch origin $BRANCH failed ($(printf '%s' "$FETCH_OUT" | tr '\n' ' ' | head -c 160)). Push $BRANCH once (fast-forward) before closing"
+  fi
+  if ! git -C "$REPO" merge-base --is-ancestor "$COMMIT" "refs/remotes/origin/$BRANCH"; then
+    fail "checkpoint not on origin: ${COMMIT:0:12} is not in origin/$BRANCH. Make the one checkpoint push (git push origin $BRANCH) before closing"
+  fi
 fi
 
 say "PASS handoff commit ${COMMIT:0:12} is on $BRANCH (head ${HEAD_SHA:0:12}); CI deferred to publish"

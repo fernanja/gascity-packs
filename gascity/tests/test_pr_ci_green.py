@@ -595,6 +595,22 @@ class ImplementationHandoffTests(PrCiGreenTestCase):
 
         self.assert_deferred(result, self.fx.head[:12])
 
+    def test_a_recorded_handoff_that_exists_only_locally_defers_ci_to_publish(self) -> None:
+        # The commit is in the local repository but GitHub has never seen it: no
+        # pull request for the branch, none for the commit (pulls_for_commit
+        # returns []), and the compare against the default branch is a 404. The
+        # deferral line must still be said and recorded, not a failure.
+        self.fx.implementation_item(root_extra={"gc.build.handoff_commit": self.fx.head, "gc.build.handoff_branch": BRANCH})
+        self.fx.pulls([])
+        self.fx.commit_pulls([])
+        self.fx.route_error(f"repos/{REPO}/compare/main...{self.fx.head}", NOT_FOUND)
+
+        result = self.fx.run()
+
+        self.assert_deferred(result, self.fx.head[:12])
+        self.assertIn(f"on {BRANCH}", result.stdout)
+        self.assertIn("no pull request yet", result.stdout)
+
     def test_a_recorded_handoff_that_is_already_on_the_default_branch_is_still_nothing_to_publish(self) -> None:
         self.fx.implementation_item(root_extra={"gc.build.handoff_commit": self.fx.head, "gc.build.handoff_branch": BRANCH})
         self.fx.pulls([])
@@ -1350,6 +1366,14 @@ class FixLoopHandoffTests(PrCiGreenTestCase):
         self.fx.pulls([])
         self.fx.commit_pulls([])
         self.fx.route(f"repos/{REPO}/compare/main...{self.fx.head}", {"ahead_by": 1, "status": "ahead"})
+
+        self.assert_deferred(self.fx.run(), self.fx.head[:12])
+
+    def test_recorded_commit_that_exists_only_locally_defers_ci_to_publish(self) -> None:
+        self.fx.fix_loop(commit=self.fx.head, branch=BRANCH)
+        self.fx.pulls([])
+        self.fx.commit_pulls([])
+        self.fx.route_error(f"repos/{REPO}/compare/main...{self.fx.head}", NOT_FOUND)
 
         self.assert_deferred(self.fx.run(), self.fx.head[:12])
 

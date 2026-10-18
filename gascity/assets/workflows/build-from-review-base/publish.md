@@ -106,6 +106,27 @@ confirmed the remote branch tip, look for one:
   is: do not mark it ready and do not close it. A draft is what keeps
   unapproved work from being merged.
 
+**A pull request that conflicts with its base never enters the wait
+(reviewer-first, gc-gef2p8).** Right after you open (or confirm) the pull
+request, read its merge state: `gh pr view <number> --json mergeable,mergeStateStatus`.
+`UNKNOWN` means GitHub is still computing it: wait 10 seconds and read again,
+up to six times. On `mergeStateStatus` `DIRTY` or `mergeable` `CONFLICTING`,
+CI cannot run on the merge commit, and the wait below would end in "no checks
+reported". Do not enter it. Instead:
+
+- if `gc.build.publish_status` on the workflow root is already `conflicting`,
+  fail this step: `gc.outcome=fail`, `gc.failure_class=hard`,
+  `gc.build.publish_status=failed`, `gc.build.publish_reason=conflicting_unresolved`,
+  and leave the pull request a draft;
+- otherwise record `gc bd update "<workflow-root-id>" --set-metadata "gc.build.publish_status=conflicting"`
+  and hand the build back to the fix loop for one local round, exactly as step 4
+  below describes (findings report, `gc.build.fix_loop_root_id`, block on the
+  loop root, release the claim). The report has one finding, a merge finding:
+  the fix pass merges the default branch into the work branch, resolves the
+  conflicts, re-runs its local checks, commits the merge with the `[skip ci]`
+  tag and re-hands it off (`gc.build.handoff_commit`). When the loop closes and
+  its re-review approved, run this protocol again from step 1.
+
 Then wait for CI on the head sha, with a bound, and judge it with the pinned
 gate script in manual mode, which reads check runs and commit statuses in both
 shapes GitHub returns (never parse `statusCheckRollup` by hand):
@@ -131,7 +152,15 @@ shapes GitHub returns (never parse `statusCheckRollup` by hand):
    step, and close `gc.outcome=pass`.
 4. On a red required check, never retry CI blind (no `gh run rerun` of a
    failed required check unless the log shows CI's own machinery died, and
-   then once, recording the run URL). Leave the PR a draft. Record the failing
+   then once, recording the run URL). Leave the PR a draft.
+   **Hand back to the fix loop ONCE.** Read `gc.build.publish_status` on the
+   workflow root first. If it is already `ci_red`, this is the second red
+   result: do not launch a second loop. Fail this step with reason
+   `ci_red_unresolved` and the failing check names: `gc.outcome=fail`,
+   `gc.failure_class=hard`, `gc.build.publish_status=failed`,
+   `gc.build.publish_reason=ci_red_unresolved`,
+   `gc.build.publish_ci_failures=<name>: <url>; ...`, and close with the check
+   names in the reason. Otherwise (first red result), record the failing
    check names with their URLs on the workflow root:
    `gc bd update "<workflow-root-id>" --set-metadata "gc.build.publish_ci_failures=<name>: <url>; <name>: <url>" --set-metadata "gc.build.publish_status=ci_red"`.
    Then hand the build back to the fix loop for one more LOCAL round: write a
@@ -154,7 +183,9 @@ shapes GitHub returns (never parse `statusCheckRollup` by hand):
    `gc.outcome=fail`, `gc.failure_class=hard`, `gc.build.publish_status=failed`
    and `gc.build.publish_reason=ci_red_unresolved`, leave the PR a draft.
    Publishing is the only step that runs CI, so a second red result after the
-   local round is a result to report, not a reason to loop again blind.
+   local round (`gc.build.publish_status` already `ci_red`) is a result to
+   report, never a reason to launch a second loop: CI must not become an
+   open-ended loop.
 
 **Report what the pre-push checks actually said (gc-4kgy1).** When a push runs
 the repo's pre-push hooks, keep their output and quote the decisive lines in

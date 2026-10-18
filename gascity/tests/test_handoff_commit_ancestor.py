@@ -30,8 +30,10 @@ class HandoffCommitAncestorTests(unittest.TestCase):
         self.addCleanup(self._tmp.cleanup)
         tmp = pathlib.Path(self._tmp.name).resolve()
         self.bin, self.beads, self.repo, self.city = tmp / "bin", tmp / "beads", tmp / "repo", tmp / "city"
+        self.origin = tmp / "origin.git"
         for directory in (self.bin, self.beads, self.repo, self.city):
             directory.mkdir()
+        subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(self.origin)], check=True)
         stub = self.bin / "gc"
         stub.write_text(GC_STUB, encoding="utf-8")
         stub.chmod(0o755)
@@ -40,6 +42,9 @@ class HandoffCommitAncestorTests(unittest.TestCase):
         self.base = self.git("rev-parse", "HEAD")
         self.git("checkout", "-q", "-b", BRANCH)
         self.first = self.commit_file("widget.py", "print('widget')\n", "widget [skip ci]")
+        # The fix pass made its one checkpoint push before the gate runs.
+        self.git("remote", "add", "origin", str(self.origin))
+        self.git("push", "-q", "origin", "main", BRANCH)
         self.fix_loop()
 
     def git(self, *args: str) -> str:
@@ -168,6 +173,94 @@ class HandoffCommitAncestorTests(unittest.TestCase):
         self.assertEqual(result.returncode, NO_VERDICT, result.stdout + result.stderr)
         self.assertIn("INFRA no verdict", result.stderr)
         self.assertNotIn("FAIL", result.stderr)
+
+    # Publishing workflows (push and open_pr both true): the commit must be a
+    # tagged checkpoint, on origin, on a branch that is not the default one.
+
+    def test_every_skip_ci_spelling_passes(self) -> None:
+        for message in (
+            "fix [ci skip]",
+            "fix [no ci]",
+            "fix [skip actions]",
+            "fix [actions skip]",
+            "fix\n\nbody text\n\nskip-checks: true",
+        ):
+            with self.subTest(message=message):
+                commit = self.commit_file("widget.py", f"print({message!r})\n", message)
+                self.git("push", "-q", "origin", BRANCH)
+                self.fix_loop(commit=commit)
+                result = self.run_gate()
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("handoff-commit-ancestor: PASS", result.stdout)
+
+    def test_a_head_commit_without_a_skip_ci_tag_fails(self) -> None:
+        commit = self.commit_file("widget.py", "print('untagged')\n", "R18 WI-3: chips")
+        self.git("push", "-q", "origin", BRANCH)
+        self.fix_loop(commit=commit)
+        self.assert_fail(self.run_gate(), "head commit carries no skip-ci tag", commit[:12])
+
+    def test_a_tag_in_the_body_of_another_word_is_not_a_tag(self) -> None:
+        commit = self.commit_file("widget.py", "print('near miss')\n", "fix: skip ci handling (no tag here)")
+        self.git("push", "-q", "origin", BRANCH)
+        self.fix_loop(commit=commit)
+        self.assert_fail(self.run_gate(), "no skip-ci tag")
+
+    def test_a_commit_that_was_never_pushed_fails_as_not_on_origin(self) -> None:
+        commit = self.commit_file("widget.py", "print('local only')\n", "local only [skip ci]")
+        self.fix_loop(commit=commit)
+        self.assert_fail(self.run_gate(), "checkpoint not on origin", commit[:12], f"origin/{BRANCH}")
+
+    def test_a_stale_remote_tracking_ref_does_not_hide_a_missing_push(self) -> None:
+        commit = self.commit_file("widget.py", "print('stale ref')\n", "stale [skip ci]")
+        self.git("update-ref", f"refs/remotes/origin/{BRANCH}", commit)  # what this clone believes; origin disagrees
+        self.fix_loop(commit=commit)
+        self.assert_fail(self.run_gate(), "checkpoint not on origin")
+
+    def test_a_branch_that_does_not_exist_on_origin_fails_as_not_on_origin(self) -> None:
+        self.git("checkout", "-q", "-b", "fix/never-pushed")
+        commit = self.commit_file("widget.py", "print('new branch')\n", "new branch [skip ci]")
+        self.fix_loop(commit=commit, branch="fix/never-pushed")
+        self.assert_fail(self.run_gate(), "checkpoint not on origin", "fix/never-pushed")
+
+    def test_an_unreachable_origin_fails_as_not_on_origin(self) -> None:
+        self.git("remote", "set-url", "origin", str(self.origin) + ".missing")
+        self.fix_loop(commit=self.first)
+        self.assert_fail(self.run_gate(), "checkpoint not on origin")
+
+    def test_a_handoff_on_the_default_branch_fails(self) -> None:
+        self.git("checkout", "-q", "main")
+        commit = self.commit_file("main.py", "x = 1\n", "straight to main [skip ci]")
+        self.git("push", "-q", "origin", "main")
+        self.fix_loop(commit=commit, branch="main")
+        self.assert_fail(self.run_gate(), "default branch", "main")
+
+    def test_the_default_branch_is_read_from_origin_head_when_it_is_set_locally(self) -> None:
+        self.git("push", "-q", "origin", f"{BRANCH}:trunk")
+        self.git("remote", "set-head", "origin", "trunk")
+        self.fix_loop(commit=self.first, branch="trunk")
+        self.git("branch", "-q", "trunk", self.first)
+        self.assert_fail(self.run_gate(), "default branch", "trunk")
+
+    def test_a_non_default_branch_named_like_one_still_passes(self) -> None:
+        self.git("push", "-q", "origin", f"{BRANCH}:main-fixes")
+        self.git("branch", "-q", "main-fixes", self.first)
+        self.fix_loop(commit=self.first, branch="main-fixes")
+        result = self.run_gate()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_a_workflow_that_does_not_publish_skips_the_tag_origin_and_branch_checks(self) -> None:
+        self.git("checkout", "-q", "main")
+        commit = self.commit_file("main.py", "x = 1\n", "untagged and unpushed")
+        self.fix_loop(commit=commit, branch="main", push="false", open_pr="false")
+        result = self.run_gate()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("handoff-commit-ancestor: PASS", result.stdout)
+
+    def test_each_refusal_is_one_line(self) -> None:
+        commit = self.commit_file("widget.py", "print('untagged')\n", "no tag")
+        self.fix_loop(commit=commit)
+        result = self.run_gate()
+        self.assertEqual(len([line for line in result.stderr.splitlines() if line.strip()]), 1, result.stderr)
 
     def test_the_gate_never_calls_gh(self) -> None:
         self.fix_loop(commit=self.first)

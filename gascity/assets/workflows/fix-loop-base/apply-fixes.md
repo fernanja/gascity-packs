@@ -22,6 +22,20 @@ uncommitted fix was stashed away). Instead:
   step is handed back as a new attempt, up to three times, and each one finds
   the same worktree.
 
+Your first git step, before any edit or commit, is to fast-forward to origin:
+`git fetch origin <branch> && git merge --ff-only origin/<branch>`. The publish
+step may have added an empty `chore: run CI` commit to `origin/<branch>`
+(reviewer-first, gc-gef2p8) after the last hand-off, and a fix committed
+without it would make your checkpoint push non-fast-forward. When the
+fast-forward is refused (your branch has commits `origin/<branch>` lacks and
+the other way round, so the two have diverged), that is a finding, not
+something to force: never `git push --force`, never `git reset --hard
+origin/<branch>`, and never rebase away either side. Write it in the repair
+summary with `status: blocked` and close the step as the hard failure below,
+naming both heads. When the branch does not exist on origin (a workflow
+that does not publish never pushed it), there is nothing to fast-forward to:
+continue.
+
 Hand the fix to re-review by local commit (reviewer-first, gc-gef2p8). The
 launcher passes the build's publishing intent as push {{push}} and open_pr
 {{open_pr}}. CI does not run between a fix pass and its re-review: the

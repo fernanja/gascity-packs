@@ -2916,6 +2916,70 @@ class FormulaAssetTests(unittest.TestCase):
                 self.assertNotIn("a gate that recorded `skipped` proves nothing", text)
                 self.assertNotIn("Review the commit at the pull request head.", text)
 
+    def test_review_fixes_bridge_terminate_conflict_and_fast_forward(self) -> None:
+        # gc-pe5m23: the five prose fixes from the independent review of the
+        # reviewer-first branch. Each fragment is the sentence a worker obeys.
+        root = pathlib.Path(__file__).resolve().parents[1]
+
+        def flat(doc: str) -> str:
+            return " ".join((root / "assets" / "workflows" / doc).read_text(encoding="utf-8").split())
+
+        # BEHAVIOR-1: the summarize step carries the item hand-off to the build root.
+        for doc in ("build-base/summarize-implementation.md",):
+            text = flat(doc)
+            for fragment in (
+                "Bridge the hand-off from the items to the build root (reviewer-first, gc-gef2p8).",
+                "`gc.build.handoff_commit` and `gc.build.handoff_branch` on its own item root",
+                "in the drain order",
+                "Record the values of the LAST item",
+                "`gc.build.handoff_items`, the ordered item root ids",
+                '--set-metadata "gc.build.handoff_items=<item-root-1>,<item-root-2>"',
+            ):
+                with self.subTest(doc=doc, fragment=fragment):
+                    self.assertIn(fragment, text)
+        review = flat("build-from-review-base/review.md")
+        for fragment in (
+            "the `summarize-implementation` step writes these there",
+            "`gc.build.handoff_items`",
+            "taking the last item's",
+        ):
+            with self.subTest(doc="review.md", fragment=fragment):
+                self.assertIn(fragment, review)
+        self.assertLess(review.index("on this workflow's root. For a build with"), review.index("when the root carries none"))
+
+        # BEHAVIOR-2 and BEHAVIOR-4: publish hands back once and never loops CI.
+        for formula_name in ("build-from-plan", "build-from-decompose", "build-from-review"):
+            text = " ".join(rendered_step_text(root, formula_name, "publish").split())
+            for fragment in (
+                "**Hand back to the fix loop ONCE.**",
+                "If it is already `ci_red`, this is the second red result: do not launch a second loop.",
+                "Fail this step with reason `ci_red_unresolved` and the failing check names",
+                "never a reason to launch a second loop",
+                "`gh pr view <number> --json mergeable,mergeStateStatus`",
+                "On `mergeStateStatus` `DIRTY` or `mergeable` `CONFLICTING`",
+                "Do not enter it.",
+                '--set-metadata "gc.build.publish_status=conflicting"',
+                "the fix pass merges the default branch into the work branch",
+                "`gc.build.publish_reason=conflicting_unresolved`",
+            ):
+                with self.subTest(formula=formula_name, fragment=fragment):
+                    self.assertIn(fragment, text)
+            self.assertLess(text.index("A pull request that conflicts with its base never enters the wait"), text.index(BOUNDED_CI_WAIT_COMMAND))
+            self.assertLess(text.index("If it is already `ci_red`"), text.index("hand the build back to the fix loop for one more LOCAL round"))
+
+        # BEHAVIOR-5: the first git step of a fix pass is a fast-forward.
+        apply_fixes = flat("fix-loop-base/apply-fixes.md")
+        for fragment in (
+            "Your first git step, before any edit or commit, is to fast-forward to origin:",
+            "`git fetch origin <branch> && git merge --ff-only origin/<branch>`",
+            "empty `chore: run CI` commit",
+            "that is a finding, not something to force",
+            "never `git push --force`",
+        ):
+            with self.subTest(doc="apply-fixes.md", fragment=fragment):
+                self.assertIn(fragment, apply_fixes)
+        self.assertLess(apply_fixes.index("Your first git step"), apply_fixes.index("Hand the fix to re-review by local commit"))
+
     def test_publish_runs_ci_once_and_marks_the_draft_ready_on_green(self) -> None:
         root = pathlib.Path(__file__).resolve().parents[1]
         for formula_name in ("build-from-plan", "build-from-decompose", "build-from-review"):

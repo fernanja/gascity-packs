@@ -26,10 +26,14 @@ request, and CI runs once, on the commit you approve, in the publish step.
 Resolve the subject in this order and name the source in the report:
 
 1. `gc.build.handoff_commit` (with `gc.build.handoff_branch`) on this
-   workflow's root;
-2. when the root carries none, the hand-off recorded by the implementation
-   item(s) the implementation summary names (the same key on each item's
-   workflow root, or `gc.work_commit` on its source anchor);
+   workflow's root. For a build with implementation items, the
+   `summarize-implementation` step writes these there (the last item's pair,
+   with the ordered item root ids in `gc.build.handoff_items`); for a fix
+   loop's re-review, the fix pass writes them on the loop's root;
+2. when the root carries none (the summarize step did not run or recorded
+   nothing), the hand-off recorded by the implementation item(s) the
+   implementation summary names (the same key on each item's workflow root,
+   or `gc.work_commit` on its source anchor), taking the last item's;
 3. when no hand-off was recorded at all, the head of the work branch at the
    launcher rig root (`git -C <rig-root> rev-parse <branch>`), and say in the
    report that the hand-off was not recorded.
