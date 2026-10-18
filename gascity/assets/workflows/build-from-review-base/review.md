@@ -67,9 +67,11 @@ The last command must print the hand-off commit. If `$WT` is left over from an
 earlier attempt, reuse it. When the subject moves (a new hand-off after a fix
 pass), bring the worktree to it (`git -C "$WT" checkout --detach
 <new-handoff-commit>`) and resolve the head there again. A fresh worktree has
-no installed dependencies: when a tool or module
-is missing, install it the way the repo documents (its own install target, for
-example `make install`) and run again. A tool missing from a fresh worktree is
+no installed dependencies: if the rig defines a `worktree-deps` target
+(`make -n worktree-deps` succeeds in `$WT`), run `make worktree-deps` in `$WT`
+before the first check. When a tool or module is still missing,
+install it the way the repo documents (its own install target, for example
+`make install`) and run again. A tool missing from a fresh worktree is
 not a defect in the change and is not a finding. Before closing this step,
 after the verdict and the reviewed commit are recorded, remove the worktree
 from the launcher rig root with `git worktree remove --force "$WT"`; nothing

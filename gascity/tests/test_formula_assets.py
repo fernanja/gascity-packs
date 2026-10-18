@@ -3614,7 +3614,9 @@ class FormulaAssetTests(unittest.TestCase):
             "which every worktree shares, so no fetch is needed",
             # Re-resolving the head there when the subject moves.
             '`git -C "$WT" checkout --detach\n<new-handoff-commit>`) and resolve the head there again',
-            # A fresh worktree without dependencies is not a finding.
+            # A fresh worktree without dependencies is not a finding; the rig's
+            # worktree-deps target provisions them first (gc-dcnjjm).
+            "if the rig defines a `worktree-deps` target\n(`make -n worktree-deps` succeeds in `$WT`), run `make worktree-deps` in `$WT`",
             "install it the way the repo documents (its own install target",
             "A tool missing from a fresh worktree is\nnot a defect in the change and is not a finding.",
             # Removed when the step closes; nothing else cleans the directory.
@@ -5561,6 +5563,12 @@ class FormulaAssetTests(unittest.TestCase):
             "git worktree add",
             "gc bd update <source-anchor-id> --set-metadata work_dir=",
             "Do not edit source files in the launcher checkout",
+            "make -n worktree-deps",
+            "make worktree-deps",
+            "worktree-deps: exit <code>",
+            "`gc.outcome=fail`, `gc.failure_class=hard`, and a `gc.failure_reason`",
+            "sleep 30; make worktree-deps; DEPS_RC=$?",
+            "Makefile at all (`make -n` exits non-zero either way), is not a failure",
         ):
             with self.subTest(step="prepare-worktree", fragment=fragment):
                 self.assertIn(fragment, prepare)
