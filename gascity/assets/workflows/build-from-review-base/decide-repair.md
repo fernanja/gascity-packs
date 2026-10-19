@@ -203,9 +203,22 @@ Defer instead, in this order:
    `gc mail send mayor -s "repair deferred: <blocker>" -m "<root id>, probe command and exit code, time, deferring since <repair_deferred_first_at>"`,
    then set that key to the send time in the same `gc bd update` as step 1.
 4. Keep this step open and hide it from the queue for a while, so the next
-   claim is a re-probe and not an immediate re-claim of the same blocker:
-   `gc bd update "<claimed-step-id>" --defer +30m --status in_progress
+   claim is a re-probe and not an immediate re-claim of the same blocker.
+   Compute the deferral time as an explicit UTC timestamp, never as
+   `--defer +30m`: bd reads `m` in a relative `--defer` as MONTHS, so
+   `+30m` stored a date 30 months out (gc-g8s5z2, build gcas-0i4ticc,
+   2026-10-19). bd has no minute unit in the compact form and rejects
+   `+30min` and `+30minutes`; only `in 30 minutes` parses as minutes, and the
+   explicit timestamp is the form to keep.
+   `DEFER_UNTIL=$(date -u -v+30M +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '+30 minutes' +%Y-%m-%dT%H:%M:%SZ)`,
+   then
+   `gc bd update "<claimed-step-id>" --defer "$DEFER_UNTIL" --status in_progress
    --set-metadata "gc.session_affinity=" --set-metadata "gc.continuation_group="`.
+   Read it back before going on:
+   `gc bd show "<claimed-step-id>" --json | jq -r '.[0].defer_until'` must
+   match `$DEFER_UNTIL` to the minute (compare the first 16 characters). If
+   it does not, stop and report the stored value; never leave a wrong
+   deferral on the step.
    `--status in_progress` is required: bd sets `status=deferred` for any
    future `--defer` date unless a status is given, and `release-if-current`
    only acts on an `in_progress` step, so a deferred step would stay assigned

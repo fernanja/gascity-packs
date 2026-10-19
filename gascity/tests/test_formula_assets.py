@@ -2622,7 +2622,12 @@ class FormulaAssetTests(unittest.TestCase):
                         "gc.build.repair_deferred=repair deferred: <blocker> still present at <UTC time",
                         "once per 6 hours",
                         "gc.build.repair_deferred_mailed_at",
-                        "--defer +30m --status in_progress",
+                        "DEFER_UNTIL=$(date -u -v+30M +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '+30 minutes' +%Y-%m-%dT%H:%M:%SZ)",
+                        '--defer "$DEFER_UNTIL" --status in_progress',
+                        "bd reads `m` in a relative `--defer` as MONTHS",
+                        "gc bd show \"<claimed-step-id>\" --json | jq -r '.[0].defer_until'",
+                        "match `$DEFER_UNTIL` to the minute",
+                        "never leave a wrong deferral on the step",
                         "`--status in_progress` is required",
                         "Cap the deferral at 24 hours",
                         "gc.build.repair_deferred_first_at",
@@ -2641,10 +2646,17 @@ class FormulaAssetTests(unittest.TestCase):
                     launch_cmd = flat.index('gc sling "<routed-to>" ')
                     self.assertLess(probe, launch_cmd)
                     # Deferral records the reason before it releases the claim.
-                    defer = flat.index("--defer +30m --status in_progress")
+                    defer = flat.index('--defer "$DEFER_UNTIL" --status in_progress')
                     self.assertLess(flat.index("gc.build.repair_deferred=repair deferred"), defer)
-                    self.assertLess(defer, flat.index("release-if-current", defer))
-                    self.assertNotIn("--defer +30m --set-metadata", flat)
+                    # The timestamp is computed before the update, and the
+                    # read-back follows it, before the release.
+                    self.assertLess(flat.index("DEFER_UNTIL=$(date -u"), defer)
+                    readback = flat.index(".[0].defer_until", defer)
+                    self.assertLess(readback, flat.index("release-if-current", defer))
+                    # bd parses a relative "+30m" as 30 months (gc-g8s5z2): the
+                    # relative form may be named only as the thing not to use.
+                    self.assertNotIn("--defer +30m --", flat)
+                    self.assertEqual(flat.count("--defer +30m"), 1)
                     # No per-loop dev-server probe: nothing listens once the
                     # loop that served it has closed.
                     self.assertNotIn("dev server or service port unreachable", flat)
