@@ -263,7 +263,7 @@ METHODOLOGY_STAGE_CONTRACTS = {
         "mode": "report",
     },
     "fix-loop-base": {
-        "steps": ["plan-fixes", "apply-fixes", "re-review"],
+        "steps": ["fix-body", "plan-fixes", "apply-fixes", "re-review"],
         "target_required": False,
         "vars": {
             "context_path",
@@ -3640,6 +3640,87 @@ class FormulaAssetTests(unittest.TestCase):
             with self.subTest(doc=doc, pointer="canonical path"):
                 self.assertIn(f"`assets/workflows/{self.REVIEW_WORKTREE_CANONICAL_DOC}`", flat)
                 self.assertIn("re-resolve the head there", flat)
+
+    def test_fix_loop_scope_stops_the_loop_when_a_step_fails(self) -> None:
+        # gc-80xjc5: engine readiness is status-only, so a formula `needs` is
+        # satisfied when apply-fixes CLOSES, whatever its gc.outcome. Loop
+        # gcas-w491q5w ran and passed its re-review after apply-fixes closed
+        # gc.failure_class=hard three times, and the loop root closed pass.
+        # Scope membership is what stops the loop: the engine skips the
+        # members that have not run and closes the body with gc.outcome=fail.
+        root = pathlib.Path(__file__).resolve().parents[1]
+        scope = "fix-body"
+        steps = {step["id"]: step for step in load_formula(root, "fix-loop-base")["steps"]}
+        self.assertEqual(
+            steps[scope]["metadata"],
+            {"gc.kind": "scope", "gc.scope_name": "fix-loop", "gc.scope_role": "body"},
+        )
+        self.assertNotIn("check", steps[scope])
+        members = {step_id for step_id, step in steps.items() if step["metadata"].get("gc.scope_ref") == scope}
+        self.assertEqual(members, {"plan-fixes", "apply-fixes", "re-review"})
+        for step_id in members:
+            with self.subTest(step=step_id):
+                metadata = steps[step_id]["metadata"]
+                self.assertEqual(metadata["gc.scope_role"], "member")
+                # Checked steps: the engine copies step metadata onto each
+                # re-spawned attempt bead, so abort_scope would stop a healthy
+                # loop whose second attempt closed with no gc.outcome.
+                self.assertNotIn("gc.on_fail", metadata)
+                # A member waits only on members of its own scope.
+                self.assertLessEqual(set(steps[step_id].get("needs", [])), members)
+        self.assertEqual(steps["re-review"]["needs"], ["apply-fixes"])
+        # The body needs exactly the members no other member needs.
+        needed = {need for step_id in members for need in steps[step_id].get("needs", [])}
+        self.assertEqual(steps[scope]["needs"], sorted(members - needed))
+
+        # Overriding a step replaces its metadata, scope included: the derived
+        # loops must extend the base without redefining a scoped step.
+        for pack, derived in (
+            ("gstack", "gstack-fix-loop"),
+            ("bmad", "bmad-fix-loop"),
+            ("superpowers", "superpowers-fix-loop"),
+            ("compound-engineering", "compound-fix-loop"),
+        ):
+            with self.subTest(derived=derived):
+                data = load_formula(root.parent / pack, derived)
+                self.assertEqual(data["extends"], ["fix-loop-base"])
+                self.assertFalse({step["id"] for step in data.get("steps", [])} & (members | {scope}))
+
+        body = " ".join((root / "assets/workflows/fix-loop-base/fix-body.md").read_text(encoding="utf-8").split())
+        for fragment in (
+            "never claim, update, or close this bead",
+            "`gc.on_fail=abort_scope`",
+            "closes this latch with `gc.outcome=fail`",
+            "the loop root closes `gc.outcome=fail`",
+            "stay on the step that failed",
+        ):
+            with self.subTest(fragment=fragment):
+                self.assertIn(fragment, body)
+
+        # The prose promises only what the scope does: the re-review is
+        # skipped and the root fails; class and reason stay on the step.
+        apply_fixes = " ".join((root / "assets/workflows/fix-loop-base/apply-fixes.md").read_text(encoding="utf-8").split())
+        for fragment in (
+            "`gc.failure_class=hard` ends the step at once and the re-review does not start",
+            "members of the loop's `fix-body` scope",
+            "closes the loop root `gc.outcome=fail`",
+            "The root does not copy `gc.failure_class` or `gc.failure_reason`",
+        ):
+            with self.subTest(doc="apply-fixes", fragment=fragment):
+                self.assertIn(fragment, apply_fixes)
+        decide = " ".join(
+            (root / "assets/workflows/build-from-review-base/decide-repair.md").read_text(encoding="utf-8").split()
+        )
+        for fragment in (
+            "A loop root closed `gc.outcome=fail`",
+            "`fix-body` scope",
+            "read its `gc.failure_class` and `gc.failure_reason`",
+            "do not launch another loop for it",
+        ):
+            with self.subTest(doc="decide-repair", fragment=fragment):
+                self.assertIn(fragment, decide)
+        requirements = " ".join((root / "REQUIREMENTS.md").read_text(encoding="utf-8").split())
+        self.assertIn("Stopping The Fix Loop On A Failed Step (gc-80xjc5)", requirements)
 
     def test_fix_loop_apply_step_writes_the_repair_summary_that_decide_repair_reads(self) -> None:
         # gc-0d4124: apply-fixes asked for a "fix summary" and named no file,

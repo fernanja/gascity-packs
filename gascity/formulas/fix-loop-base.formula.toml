@@ -47,17 +47,34 @@ default = "false"
 description = "Publishing intent of the build under repair. See push: a fix pass opens no pull request and waits for no CI."
 default = "false"
 
+# Fix scope (gc-80xjc5). `plan-fixes`, `apply-fixes` and `re-review` are members
+# of the `fix-body` scope. A formula `needs` is satisfied when its predecessor
+# CLOSES, whatever its outcome (engine readiness is status-only), so without a
+# scope a hard-failed apply-fixes still readied re-review: loop gcas-w491q5w ran
+# and passed a re-review after apply-fixes closed gc.failure_class=hard three
+# times. When a member closes with an explicit gc.outcome=fail the engine skips
+# the members that have not run and closes `fix-body` with gc.outcome=fail, so
+# the loop root closes fail. No member carries gc.on_fail=abort_scope: apply-fixes
+# and re-review are checked steps, and the engine copies step metadata onto each
+# re-spawned attempt bead (see "Stopping On A Failed Step" in ../REQUIREMENTS.md).
+[[steps]]
+id = "fix-body"
+title = "Fix loop scope"
+needs = ["re-review"]
+metadata = { "gc.kind" = "scope", "gc.scope_name" = "fix-loop", "gc.scope_role" = "body" }
+description_file = "../assets/workflows/fix-loop-base/fix-body.md"
+
 [[steps]]
 id = "plan-fixes"
 title = "Plan review fixes"
-metadata = { "gc.run_target" = "gc.review-synthesizer" }
+metadata = { "gc.scope_ref" = "fix-body", "gc.scope_role" = "member", "gc.run_target" = "gc.review-synthesizer" }
 description_file = "../assets/workflows/fix-loop-base/plan-fixes.md"
 
 [[steps]]
 id = "apply-fixes"
 title = "Apply review fixes"
 needs = ["plan-fixes"]
-metadata = { "gc.run_target" = "{{implementation_target}}" }
+metadata = { "gc.scope_ref" = "fix-body", "gc.scope_role" = "member", "gc.run_target" = "{{implementation_target}}" }
 description_file = "../assets/workflows/fix-loop-base/apply-fixes.md"
 
 [steps.check]
@@ -72,7 +89,7 @@ timeout = "2m"
 id = "re-review"
 title = "Re-review fixed work"
 needs = ["apply-fixes"]
-metadata = { "gc.run_target" = "gc.implementation-reviewer", "gc.build.artifact_schema" = "gc.build.review.v1", "gc.build.artifact_path_keys" = "gc.build.review_report_path" }
+metadata = { "gc.scope_ref" = "fix-body", "gc.scope_role" = "member", "gc.run_target" = "gc.implementation-reviewer", "gc.build.artifact_schema" = "gc.build.review.v1", "gc.build.artifact_path_keys" = "gc.build.review_report_path" }
 description_file = "../assets/workflows/fix-loop-base/re-review.md"
 
 [steps.check]

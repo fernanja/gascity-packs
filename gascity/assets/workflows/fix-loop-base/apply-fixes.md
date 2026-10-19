@@ -80,8 +80,12 @@ the attempts. Write what you found in the repair summary (below) with
 failing command:
 `gc bd update "<claimed-step-id>" --set-metadata gc.outcome=fail --set-metadata gc.failure_class=hard --set-metadata "gc.failure_reason=<commands and results>"`,
 then `gc bd close "<claimed-step-id>"`. `gc.failure_class=hard` ends the step
-at once and the re-review does not start; a failed outcome without it is handed back
-as a new attempt, up to three times.
+at once and the re-review does not start: this step and the re-review are
+members of the loop's `fix-body` scope, so the engine skips the re-review and
+closes the loop root `gc.outcome=fail`; a failed outcome without it is handed
+back as a new attempt, up to three times. The root does not copy
+`gc.failure_class` or `gc.failure_reason`: they stay on this step's bead, which
+`decide-repair` reads.
 
 When push or open_pr is not `true`, make no checkpoint push; the gate then
 records `skipped: no publishing intent` when no hand-off is recorded, and still

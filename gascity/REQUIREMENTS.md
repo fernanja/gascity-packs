@@ -603,6 +603,37 @@ including its metadata. A step left outside its scope still runs after the
 build has stopped, and a scope body must only need members of its own scope.
 `build-base` and the formulas that extend it do not use these scopes.
 
+### Stopping The Fix Loop On A Failed Step (gc-80xjc5)
+
+The engine decides step readiness from status alone: a step whose predecessor
+has CLOSED is ready, whatever the predecessor's `gc.outcome` (`internal/beads/
+memstore.go` and `caching_store_reads.go` readiness; only scope members are
+checked for outcome, in `reconcileTerminalScopedMemberWithOptions`, and only
+when `gc.scope_ref` is set). `fix-loop-base` therefore declares one scope:
+
+| Scope body | Members | Body needs |
+| --- | --- | --- |
+| `fix-body` | `plan-fixes`, `apply-fixes`, `re-review` | `re-review` |
+
+Each member carries `gc.scope_ref = "fix-body"` and `gc.scope_role = "member"`
+and none carries `gc.on_fail = "abort_scope"` (`apply-fixes` and `re-review` are
+checked steps; see "Stopping On A Failed Step"). A member that closes with an
+explicit `gc.outcome=fail` stops the loop: the engine closes the members that
+have not run with `gc.outcome=skipped` and `fix-body` with `gc.outcome=fail`, so
+the loop root closes `gc.outcome=fail`. `apply-fixes` closed
+`gc.failure_class=hard` ends with `gc.outcome=fail` on its control once the
+ralph fix of gc-vo89ew is installed, and the re-review does not start.
+
+What the pack cannot express: the engine does not copy `gc.failure_class` or
+`gc.failure_reason` to the scope body or the loop root (`propagateScopeMember
+Metadata` copies non-`gc.` keys only), so they stay on the failed step's bead
+and `decide-repair` reads them there. The known limit of "Stopping On A Failed
+Step" applies: a second or later `apply-fixes` or `re-review` attempt that
+closes with an explicit `gc.outcome=fail` stops the loop while attempts remain.
+Derived loops (`gstack-fix-loop`, `bmad-fix-loop`, and the like) extend the base
+without overriding these steps and inherit the scope; a derived loop that
+overrides a step must keep its scope metadata.
+
 ## Methodology Metadata Contract
 
 Top-level build formulas declare compatibility metadata in one formal metadata

@@ -39,6 +39,16 @@ again only once that loop has closed. A loop root's own `gc.outcome=pass`
 means only that the loop ran to its end; the verdict is in the re-review
 artifact, as the next paragraph requires.
 
+A loop root closed `gc.outcome=fail` means a step of the loop closed with an
+explicit `gc.outcome=fail` and the engine stopped the loop's `fix-body` scope
+(gc-80xjc5): the members that had not run, normally the re-review, were closed
+`gc.outcome=skipped`. That loop produced no re-review, so the most recent
+re-review artifact on disk belongs to an earlier pass and says nothing about
+this one. Find the failed step with
+`gc bd list --metadata-field "gc.root_bead_id=<loop-root-id>" --metadata-field gc.outcome=fail --status closed --json`, read its `gc.failure_class` and `gc.failure_reason` (the root
+carries neither), and record `blocked` below with that reason. When the class
+is `hard`, do not launch another loop for it: the same cause stops the next one.
+
 The exit reason is whichever of the three happened (approved, blocked or
 exhausted), determined by re-reading the
 MOST RECENT re-review artifact's own verdict — never by whether the
