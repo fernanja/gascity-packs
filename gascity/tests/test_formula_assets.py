@@ -2835,11 +2835,19 @@ class FormulaAssetTests(unittest.TestCase):
                     "do not weaken, skip or re-baseline a test",
                     HARD_FAILURE_CLOSE_COMMAND,
                     "`gc.failure_class=hard` ends the step at once",
-                    "a failed outcome without it is handed back as a new attempt, up to three times",
                     "is not an attempt",
                     "`INFRA` rather than `FAIL`",
                 ):
                     self.assertIn(fragment, text, f"{doc} lost: {fragment}")
+                # fix-loop-base states the retry rule per attempt (gc-80xjc5):
+                # its scope makes an explicit fail terminal from attempt 2 on.
+                self.assertIn(
+                    "the check gate then drives a new attempt, up to three in all"
+                    if fix_loop
+                    else "a failed outcome without it is handed back as a new attempt, up to three times",
+                    text,
+                    f"{doc} lost: its retry rule",
+                )
                 if fix_loop:
                     self.assertIn(MANUAL_HANDOFF_ANCESTOR_COMMAND, text)
                     self.assertIn("../assets/scripts/checks/handoff-commit-ancestor.sh", text)
@@ -3755,6 +3763,10 @@ class FormulaAssetTests(unittest.TestCase):
             "members of the loop's `fix-body` scope",
             "closes the loop root `gc.outcome=fail`",
             "The root does not copy `gc.failure_class` or `gc.failure_reason`",
+            "An explicit `gc.outcome=fail` is terminal from attempt 2 on",
+            "close the step WITHOUT `gc.outcome`",
+            "unless the failure reason names an environment blocker",
+            "`decide-repair`'s probe block governs",
         ):
             with self.subTest(doc="apply-fixes", fragment=fragment):
                 self.assertIn(fragment, apply_fixes)
@@ -3766,11 +3778,21 @@ class FormulaAssetTests(unittest.TestCase):
             "`fix-body` scope",
             "read its `gc.failure_class` and `gc.failure_reason`",
             "do not launch another loop for it",
+            "--metadata-field gc.kind=ralph",
+            "the class may sit on the iteration beads rather than on the control",
+            "unless the failure reason names an environment blocker",
+            "the probe block below governs",
         ):
             with self.subTest(doc="decide-repair", fragment=fragment):
                 self.assertIn(fragment, decide)
         requirements = " ".join((root / "REQUIREMENTS.md").read_text(encoding="utf-8").split())
         self.assertIn("Stopping The Fix Loop On A Failed Step (gc-80xjc5)", requirements)
+        for fragment in (
+            "An explicit `gc.outcome=fail` is therefore terminal from attempt 2 on",
+            "a retry is signalled by closing WITHOUT `gc.outcome`",
+        ):
+            with self.subTest(doc="REQUIREMENTS", fragment=fragment):
+                self.assertIn(fragment, requirements)
 
     def test_fix_loop_apply_step_writes_the_repair_summary_that_decide_repair_reads(self) -> None:
         # gc-0d4124: apply-fixes asked for a "fix summary" and named no file,

@@ -82,10 +82,22 @@ failing command:
 then `gc bd close "<claimed-step-id>"`. `gc.failure_class=hard` ends the step
 at once and the re-review does not start: this step and the re-review are
 members of the loop's `fix-body` scope, so the engine skips the re-review and
-closes the loop root `gc.outcome=fail`; a failed outcome without it is handed
-back as a new attempt, up to three times. The root does not copy
+closes the loop root `gc.outcome=fail`. Use `hard` when the local pass cannot be
+made green, unless the failure reason names an environment blocker (Docker API
+not answering, disk full, a shared service down): then `decide-repair`'s probe
+block governs and may relaunch after the probe passes. The root does not copy
 `gc.failure_class` or `gc.failure_reason`: they stay on this step's bead, which
 `decide-repair` reads.
+
+An explicit `gc.outcome=fail` is terminal from attempt 2 on, whatever its
+failure class. The engine strips the scope keys (`gc.scope_ref`,
+`gc.scope_role`, `gc.on_fail`) from attempt 1 only, and copies them onto
+attempt 2 and later (`internal/formula/ralph.go:109-111`,
+`internal/dispatch/control.go:864-869`), so a `gc.outcome=fail` close on
+attempt 2 or 3 aborts the scope, skips the re-review and fails the loop root,
+and the remaining attempt is lost. To ask for a retry, close the step WITHOUT
+`gc.outcome`: the check gate then drives a new attempt, up to three in all.
+`hard` stays terminal at any attempt once engine fix `3c8cd61ae` is installed.
 
 When push or open_pr is not `true`, make no checkpoint push; the gate then
 records `skipped: no publishing intent` when no hand-off is recorded, and still

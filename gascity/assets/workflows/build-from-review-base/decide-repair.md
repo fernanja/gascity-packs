@@ -45,9 +45,17 @@ explicit `gc.outcome=fail` and the engine stopped the loop's `fix-body` scope
 `gc.outcome=skipped`. That loop produced no re-review, so the most recent
 re-review artifact on disk belongs to an earlier pass and says nothing about
 this one. Find the failed step with
-`gc bd list --metadata-field "gc.root_bead_id=<loop-root-id>" --metadata-field gc.outcome=fail --status closed --json`, read its `gc.failure_class` and `gc.failure_reason` (the root
-carries neither), and record `blocked` below with that reason. When the class
-is `hard`, do not launch another loop for it: the same cause stops the next one.
+`gc bd list --metadata-field "gc.root_bead_id=<loop-root-id>" --metadata-field gc.kind=ralph --metadata-field gc.outcome=fail --status closed --json`
+(`gc.kind=ralph` selects the control bead; without it the query also returns the
+`fix-body` scope and every failed iteration), read its `gc.failure_class` and
+`gc.failure_reason` (the root carries neither), and record `blocked` below with
+that reason. Until engine fix `3c8cd61ae` is installed, the class may sit on the
+iteration beads rather than on the control: if the control carries none, read
+the latest failed iteration. When the class is `hard`, do not launch another
+loop for it: the same cause stops the next one, unless the failure reason names
+an environment blocker (Docker API not answering, disk full, a shared service
+down): then the probe block below governs and may relaunch after the probe
+passes.
 
 The exit reason is whichever of the three happened (approved, blocked or
 exhausted), determined by re-reading the

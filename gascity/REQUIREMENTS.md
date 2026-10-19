@@ -629,7 +629,13 @@ What the pack cannot express: the engine does not copy `gc.failure_class` or
 Metadata` copies non-`gc.` keys only), so they stay on the failed step's bead
 and `decide-repair` reads them there. The known limit of "Stopping On A Failed
 Step" applies: a second or later `apply-fixes` or `re-review` attempt that
-closes with an explicit `gc.outcome=fail` stops the loop while attempts remain.
+closes with an explicit `gc.outcome=fail` stops the loop while attempts remain:
+the engine strips the scope keys from attempt 1 only and copies them onto later
+attempts (`internal/formula/ralph.go:109-111`, `internal/dispatch/control.go:
+864-869`). An explicit `gc.outcome=fail` is therefore terminal from attempt 2 on;
+a retry is signalled by closing WITHOUT `gc.outcome` (the check gate then drives
+the next attempt); `hard` stays terminal at any attempt once `3c8cd61ae` is
+installed.
 Derived loops (`gstack-fix-loop`, `bmad-fix-loop`, and the like) extend the base
 without overriding these steps and inherit the scope; a derived loop that
 overrides a step must keep its scope metadata.
