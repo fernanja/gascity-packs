@@ -2589,7 +2589,9 @@ class FormulaAssetTests(unittest.TestCase):
                     self.assertIn(fragment, decide)
                 # The edge lands before the release: a released step whose
                 # blockers are all closed is claimed again immediately.
-                self.assertIn(release, decide[decide.index(edge):])
+                handback = decide[decide.index("## Handing this step back"):]
+                self.assertLess(decide.index(edge), decide.index("## Handing this step back"))
+                self.assertIn(release, handback)
                 for stale in (
                     'gc session wait "$SESSION_TARGET"',
                     "--on-beads",
@@ -2620,16 +2622,33 @@ class FormulaAssetTests(unittest.TestCase):
                         "gc.build.repair_deferred=repair deferred: <blocker> still present at <UTC time",
                         "once per 6 hours",
                         "gc.build.repair_deferred_mailed_at",
-                        "--defer +30m",
+                        "--defer +30m --status in_progress",
+                        "`--status in_progress` is required",
+                        "Cap the deferral at 24 hours",
+                        "gc.build.repair_deferred_first_at",
+                        "gc.build.repair_status=blocked",
+                        "gc.failure_class=review_repair_blocked",
+                        "gc.restart.reason=environment",
+                        "deferring since",
+                        "names no environment blocker needs no probe: launch at once",
                         'gc bd release-if-current "<claimed-step-id>" "<assignee>"',
                         "Do not close the step, do not park it with `gc session wait`",
                     ):
                         self.assertIn(fragment, flat)
+                    # The probe precedes the actual launch command line, not
+                    # the probe block's own "Before the gc sling below" text.
                     probe = flat.index("Probe the environment before launching")
-                    self.assertLess(probe, flat.index("gc sling"))
+                    launch_cmd = flat.index('gc sling "<routed-to>" ')
+                    self.assertLess(probe, launch_cmd)
                     # Deferral records the reason before it releases the claim.
-                    self.assertLess(flat.index("gc.build.repair_deferred=repair deferred"), flat.index("--defer +30m"))
-                    self.assertLess(flat.index("--defer +30m"), flat.index("release-if-current", flat.index("--defer +30m")))
+                    defer = flat.index("--defer +30m --status in_progress")
+                    self.assertLess(flat.index("gc.build.repair_deferred=repair deferred"), defer)
+                    self.assertLess(defer, flat.index("release-if-current", defer))
+                    self.assertNotIn("--defer +30m --set-metadata", flat)
+                    # No per-loop dev-server probe: nothing listens once the
+                    # loop that served it has closed.
+                    self.assertNotIn("dev server or service port unreachable", flat)
+                    self.assertIn("Never probe a per-loop dev server", flat)
 
     def test_finalize_records_a_blocked_build_once(self) -> None:
         # gc-2ua7i: finalize was told to close its own bead gc.outcome=fail
