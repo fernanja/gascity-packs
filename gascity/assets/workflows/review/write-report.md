@@ -26,10 +26,14 @@ changed-browser-spec stage runs the specs touched by the hand-off on every
 configured device profile) and the real-server suites for the areas the change
 touches, each run once (a second run only after a failed first). Do not run the
 full browser suite or the full device matrix locally (gc-65qlw7: 93 minutes and
-a host-wide load spike per review); the full suite runs once in CI, on the
-approved commit, in the publish step. Run the full local matrix only when the
-hand-off changes shared layout, design-system primitives or the test harness
-itself, and say so in the report.
+a host-wide load spike per review). The rig's CI policy applies after publish:
+the PR gate runs the browser suite on its PR profile (ascent: Desktop Chrome
+only, 2 shards, required check `vitest-browser-gate`), and the complete device
+matrix runs only in the weekly or manually dispatched run under a check name
+that never blocks a PR (ascent vitest-browser.yml header, Jon 2026-10-01). A
+reviewer does not reproduce either locally. Run extra device profiles locally
+only when the hand-off changes shared layout, design-system primitives or the
+test harness itself, scoped to the changed specs, and say so in the report.
 
 **Live-suite failures that are not findings (gc-aecuvz).** A full-suite run
 meets a live host, so classify each failing test before raising it, and record
