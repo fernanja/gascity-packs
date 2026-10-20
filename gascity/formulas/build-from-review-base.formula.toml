@@ -53,6 +53,10 @@ default = ""
 description = "Continuation interaction posture: interactive, autonomous, or headless."
 default = "interactive"
 
+[vars.review_verification_scope]
+description = "Reviewer verification breadth: scoped (full non-browser suites + changed browser specs; default pre-GA) or full (adds the complete browser suite on every device profile; post-GA hardening)."
+default = "scoped"
+
 [vars.review_mode]
 description = "Review authority: report, agent, or interactive."
 default = "agent"

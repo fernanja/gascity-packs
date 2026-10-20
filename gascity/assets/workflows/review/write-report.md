@@ -21,19 +21,28 @@ commit, `gc.build.handoff_commit` on the workflow root, checked out as
 `git worktree add --detach <scratch> <sha>` from the rig repository. Name that
 sha in the report. No pull request exists before the publish step, so the PR
 check list is not required evidence; the evidence is the worker's preflight
-record plus your own run of the rig's scoped gate (`make preflight-fast`, whose
-changed-browser-spec stage runs the specs touched by the hand-off on every
-configured device profile) and the real-server suites for the areas the change
-touches, each run once (a second run only after a failed first). Do not run the
-full browser suite or the full device matrix locally (gc-65qlw7: 93 minutes and
-a host-wide load spike per review). The rig's CI policy applies after publish:
-the PR gate runs the browser suite on its PR profile (ascent: Desktop Chrome
-only, 2 shards, required check `vitest-browser-gate`), and the complete device
-matrix runs only in the weekly or manually dispatched run under a check name
-that never blocks a PR (ascent vitest-browser.yml header, Jon 2026-10-01). A
-reviewer does not reproduce either locally. Run extra device profiles locally
+record plus your own verification run, whose breadth is set by
+`review_verification_scope` = `{{review_verification_scope}}` (owner decision,
+Jon 2026-10-19, gc-65qlw7):
+
+- `scoped` (the default until GA): run the rig's full NON-browser test suites
+  once (ascent: `make preflight-fast`, which includes the full jsdom/unit
+  suite, plus `make test` for the full Django suite) and the browser specs
+  only for the files the hand-off changed, on each configured device profile
+  (ascent: `make preflight-fast` stage 18 does exactly this). Do not run the
+  full browser suite or the full device matrix locally: pre-GA, re-running
+  low-risk redundant tests costs hours per review and host-wide load; the
+  rig's weekly CI run of the complete browser matrix is the backstop
+  (ascent vitest-browser.yml `schedule`, Sunday 06:17 UTC, reported under
+  `vitest-browser-gate (full matrix)`), and the PR gate runs the browser
+  suite on its PR profile (ascent: Desktop Chrome, 2 shards).
+- `full` (post-GA hardening, flip the variable, no prompt edit): in addition,
+  run the complete browser suite on every configured device profile and the
+  rig's real-server suites once (a second run only after a failed first).
+
+Either way, run extra device profiles locally only for the changed specs, and
 only when the hand-off changes shared layout, design-system primitives or the
-test harness itself, scoped to the changed specs, and say so in the report.
+test harness itself; say so in the report.
 
 **Live-suite failures that are not findings (gc-aecuvz).** A full-suite run
 meets a live host, so classify each failing test before raising it, and record
