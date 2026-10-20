@@ -21,10 +21,15 @@ commit, `gc.build.handoff_commit` on the workflow root, checked out as
 `git worktree add --detach <scratch> <sha>` from the rig repository. Name that
 sha in the report. No pull request exists before the publish step, so the PR
 check list is not required evidence; the evidence is the worker's preflight
-record plus your own runs of the full browser suite on every configured device
-profile and the rig's real-server suites, each run once (a second full run only
-after a failed first). CI runs once, on the approved commit, in the publish
-step.
+record plus your own run of the rig's scoped gate (`make preflight-fast`, whose
+changed-browser-spec stage runs the specs touched by the hand-off on every
+configured device profile) and the real-server suites for the areas the change
+touches, each run once (a second run only after a failed first). Do not run the
+full browser suite or the full device matrix locally (gc-65qlw7: 93 minutes and
+a host-wide load spike per review); the full suite runs once in CI, on the
+approved commit, in the publish step. Run the full local matrix only when the
+hand-off changes shared layout, design-system primitives or the test harness
+itself, and say so in the report.
 
 **Live-suite failures that are not findings (gc-aecuvz).** A full-suite run
 meets a live host, so classify each failing test before raising it, and record
