@@ -49,8 +49,9 @@ not wait for CI:
 1. Run the local pass before the commit: `make preflight-fast` (or the rig's
    documented fast gate) and the tests of the code you changed. A failing test
    is fixed; it is never skipped, quarantined or re-baselined away. Do not run
-   the full browser suite or the real-server suites here: the reviewer runs
-   them once, on every device profile.
+   the full browser suite or the real-server suites here: the reviewer verifies
+   at the rig's configured breadth (`review_verification_scope`), and CI and the
+   weekly run cover the full matrix.
 2. Commit on the work branch in your worktree. The subject of the hand-off
    commit (the head of the branch) carries the tag `[skip ci]`, for example
    `fix: tap rows on phones [skip ci]`. GitHub skips the push and

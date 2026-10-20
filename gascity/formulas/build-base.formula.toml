@@ -52,6 +52,10 @@ interaction_modes = ["interactive", "autonomous", "headless"]
 review_modes = ["report", "agent", "interactive"]
 
 [vars]
+[vars.review_verification_scope]
+description = "Reviewer verification breadth: scoped (default pre-GA) or full (post-GA)."
+default = "scoped"
+
 [vars.artifact_root]
 description = "Build artifact root."
 required = true

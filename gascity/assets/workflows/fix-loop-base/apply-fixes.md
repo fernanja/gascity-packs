@@ -48,8 +48,9 @@ checkpoint push. It opens no pull request and waits for no CI:
    `make preflight-fast` (or the rig's documented fast gate) and the tests of
    the code you changed. A failing test is fixed; it is never skipped,
    quarantined or re-baselined away. Do not run the full browser suite or the
-   real-server suites: the re-reviewer runs them once, on every device
-   profile.
+   real-server suites: the re-reviewer verifies at the rig's configured
+   breadth (`review_verification_scope`), and CI and the weekly run cover the
+   full matrix.
 2. Commit on the branch under repair. The subject of the fix commit (the head
    of the branch) carries the tag `[skip ci]`, for example
    `fix: keep row taps on phones [skip ci]`. GitHub skips the push and

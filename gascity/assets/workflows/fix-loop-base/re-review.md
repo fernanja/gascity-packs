@@ -34,11 +34,17 @@ lacks installed dependencies, are under "Where to work" in this pack's
 `assets/workflows/build-from-review-base/review.md`.
 
 Probe the fixed behaviour in a browser from that worktree against the available
-seeded stack, then run, once each: the full browser suite on every configured
-device profile and the rig's real-server suites. These are the runs CI does not
-make, and the defects they find are the reason this re-review comes before CI.
-The repo's one-full-run rule holds: a second full run only after a failed first
-one, and only for the failure.
+seeded stack, then verify at the breadth set by `review_verification_scope` =
+`{{review_verification_scope}}` (Jon, 2026-10-19, gc-65qlw7). `scoped` (default
+pre-GA): run once the rig's full NON-browser test suites (ascent: `make
+preflight-fast` plus `make test`) and the browser specs only for the files the
+fix changed, on each configured device profile (ascent: `make preflight-fast`
+stage 18); never the full browser suite, the full device matrix or the full
+real-server collection locally, only the real-server specs for the areas the fix
+touches. `full` (post-GA): add the complete browser suite on every configured
+device profile and the rig's real-server suites, once each. CI's PR gate and the
+weekly full-matrix run cover the rest. The repo's one-run rule holds: a second
+run only after a failed first one, and only for the failure.
 
 **Live-suite failures that are not findings (gc-aecuvz).** A full-suite run
 meets a live host, so classify each failing test before raising it, and record

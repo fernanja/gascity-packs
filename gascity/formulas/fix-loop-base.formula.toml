@@ -15,6 +15,10 @@ internal = true
 formula_compiler = ">=2.0.0"
 
 [vars]
+[vars.review_verification_scope]
+description = "Reviewer verification breadth: scoped (default pre-GA) or full (post-GA)."
+default = "scoped"
+
 [vars.context_path]
 description = "Optional context bundle path."
 default = ""

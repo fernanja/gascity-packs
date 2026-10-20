@@ -79,12 +79,20 @@ else cleans that directory.
 
 Probe behaviour from that worktree: start the application from it against the
 available seeded stack and exercise the changed behaviour in a browser, not
-only in tests. Then run, once each: the full browser suite on every configured
-device profile (phone and tablet profiles included), and the rig's real-server
-suites against the available seeded stack. These are the suites CI does not
-run or the worker did not, and the defects they find are the reason this
-review comes before CI. The repo's one-full-run rule holds: a second full run
-only after a failed first one, and only for the failure.
+only in tests. Probe the change in a browser from that worktree, then verify at the breadth
+set by `review_verification_scope` = `{{review_verification_scope}}` (Jon,
+2026-10-19, gc-65qlw7). `scoped` (default pre-GA): run once the rig's full
+NON-browser test suites (ascent: `make preflight-fast`, which includes the full
+jsdom/unit suite, plus `make test`) and the browser specs only for the files the
+hand-off changed, on each configured device profile (ascent: `make
+preflight-fast` stage 18 does exactly this); never the full browser suite or the
+full device matrix locally, and never the full real-server collection, only the
+real-server specs for the areas the change touches. `full` (post-GA): add the
+complete browser suite on every configured device profile and the rig's
+real-server suites, once each. CI's PR gate runs the browser suite on its PR
+profile and the weekly run covers the full matrix. Test evidence is these
+runs plus the worker's preflight record. The repo's one-run rule holds: a second run only after a failed
+first one, and only for the failure.
 
 **Live-suite failures that are not findings (gc-aecuvz).** A full-suite run
 meets a live host, so classify each failing test before raising it, and record

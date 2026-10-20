@@ -19,9 +19,18 @@ that proof is absent.
 Review the local hand-off commit (reviewer-first, gc-gef2p8): the subject is
 `gc.build.handoff_commit` on the workflow root, checked out in a detached
 scratch worktree of the rig repository (shared object store, no fetch). There is no pull request before the publish step, so its check list is
-not evidence. Probe the change in a browser from that worktree, then run once:
-the full browser suite on every configured device profile and the rig's
-real-server suites against the available seeded stack. Test evidence is these
+not evidence. Probe the change in a browser from that worktree, then verify at the breadth
+set by `review_verification_scope` = `{{review_verification_scope}}` (Jon,
+2026-10-19, gc-65qlw7). `scoped` (default pre-GA): run once the rig's full
+NON-browser test suites (ascent: `make preflight-fast`, which includes the full
+jsdom/unit suite, plus `make test`) and the browser specs only for the files the
+hand-off changed, on each configured device profile (ascent: `make
+preflight-fast` stage 18 does exactly this); never the full browser suite or the
+full device matrix locally, and never the full real-server collection, only the
+real-server specs for the areas the change touches. `full` (post-GA): add the
+complete browser suite on every configured device profile and the rig's
+real-server suites, once each. CI's PR gate runs the browser suite on its PR
+profile and the weekly run covers the full matrix. Test evidence is these
 runs plus the worker's preflight record. Concrete formulas carry the full
 procedure; see `build-from-review-base/review.md`.
 
