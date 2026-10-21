@@ -24,8 +24,32 @@ existing git worktree and is different from the launcher root. If metadata is
 missing, check `$GC_CITY/.gc/worktrees/<rig>/<source-anchor-id>` and then the
 legacy `<launcher-root>/worktrees/<source-anchor-id>`; if either exists and is
 a git worktree, record that recovered worktree and include a setup warning in
-the context. If no implementation worktree can be resolved, close this setup bead
-with `gc.outcome=fail` and record the missing source-anchor/worktree evidence.
+the context.
+
+If neither path exists, recover the worktree instead of failing. The engine reaps
+an item worktree when its work-item bead closes, so a missing worktree is the
+normal state at review time, not a defect (gc-s01jec). Read the workflow root's
+`gc.build.handoff_commit` and `gc.build.handoff_branch`. Fetch origin in the
+launcher repo and confirm the commit exists (`git -C <launcher-root> cat-file -e
+<commit>^{commit}`). Then create the worktree at
+`$GC_CITY/.gc/worktrees/<rig>/<source-anchor-id>`:
+
+- If the launcher repo has a review-worktree tool, use it, because it also
+  installs dependencies the review lanes need (for example, from the launcher
+  root: `make review-worktree SHA=<commit> DIR=<path>`).
+- Otherwise run `git -C <launcher-root> worktree add --detach <path> <commit>`.
+
+Verify `git -C <path> rev-parse HEAD` prints the hand-off commit. Pin the
+recovered worktree so the reaper keeps it until the workflow closes: set
+`work_dir=<path>` on the workflow root and on the source anchor (`gc bd update
+<id> --set-metadata work_dir=<path>`; leave the root's `gc.work_dir` as the
+launcher root). Record it in the context as a recovered worktree with a setup
+warning, and continue. Also record `gc.build.review_subject_commit=<commit>` and
+`gc.build.review_subject_branch=<branch>` on the root so publish can find the
+reviewed commit.
+
+Close this setup bead with `gc.outcome=fail` only when the hand-off commit
+itself cannot be found; record the missing commit and source-anchor evidence.
 
 The context body must include an `## Implementation Worktrees` section before
 the artifact excerpts. For each source anchor include:
