@@ -10,6 +10,18 @@ Include a lightweight implementation readiness pass before decomposition:
 - risk: risky files, migrations, public interfaces, and rollback concerns are
   explicit enough for an implementer
 
+Check the requirements and the plan against the rig's product invariants
+(gc-4asa1t; R19 shipped `isAccountType = row.level === 0` because a design
+prompt said so and nothing checked it). Before the verdict, read the section
+titled "Product Invariants" in the rig root `CLAUDE.md`. When the file or the
+section is absent, say so in the review. Check both the requirements and the
+plan against each invariant. A requirement or plan step that contradicts an
+invariant is a `must-address` note naming the invariant and the conflicting
+text, and the plan is corrected to follow the invariant: the invariant wins
+over requirements text, design prompts and boards. When the conflict cannot be
+resolved inside the plan (the requirements demand the violation), the verdict
+is `changes_required` and you mail the mayor at once with both texts.
+
 Treat a deferred requirement as a blocking finding. Go through every
 requirement and acceptance criterion in the requirements artifact and find
 where the plan delivers it. If the plan marks one as deferred, out of scope,

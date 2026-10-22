@@ -104,6 +104,28 @@ detached worktree of `gc.build.review_subject_commit` at
 "Where to work" in `review.md` beside this file describes, push from there so
 the pre-push hooks test that commit, and remove it before closing this step.
 
+A fresh scratch worktree has no installed dependencies, and the pre-push hooks
+fail in one without them (gc-ogmkzd: three pushes on 2026-10-21/22 died with
+`eslint: command not found`, exit 127, and each cost a ~10-minute pre-push gate
+run). Before any push, provision the publish worktree the way review does
+(`make review-worktree SHA=<sha> DIR=<path>` already includes it), or run the
+rig's `worktree-deps` target in it, with one retry after 30 seconds:
+
+```sh
+cd "$WT"
+if make -n worktree-deps >/dev/null 2>&1; then
+  make worktree-deps; DEPS_RC=$?
+  if [ "$DEPS_RC" != 0 ]; then sleep 30; make worktree-deps; DEPS_RC=$?; fi
+else
+  DEPS_RC=skipped   # the rig defines no worktree-deps target
+fi
+```
+
+When the target exists and still exits non-zero after the retry, do not push:
+fail this step with `gc.outcome=fail`, `gc.failure_class=hard` and a
+`gc.failure_reason` naming `make worktree-deps` and its exit code. A rig with
+no such target is not a failure.
+
 **This step runs CI, once (reviewer-first, gc-gef2p8).** No pull request
 exists yet on a first publish: the implementation and fix passes made only
 `[skip ci]` checkpoint pushes and opened none. Only after steps 1-5 above have

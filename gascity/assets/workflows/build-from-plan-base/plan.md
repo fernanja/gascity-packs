@@ -16,6 +16,13 @@ is spent, write the plan with what you have, list each unverified assumption
 under a `## Unverified` heading with what would settle it, and close: a plan
 with named gaps is reviewable, a plan still in discovery is not.
 
+Read the rig's product invariants before planning (gc-4asa1t). Read the
+section titled "Product Invariants" in the rig root `CLAUDE.md` (when absent,
+say so in the plan). When a requirement conflicts with an invariant, plan to
+the invariant and record the conflict under a `## Invariant conflicts` heading
+in the plan: the invariant wins over requirements text, design prompts and
+boards.
+
 Trace consumer call paths. When the requirements or design source name a
 component or API that a page or other consumer will use (especially one an
 earlier or sibling part delivered), record the exact call path (design

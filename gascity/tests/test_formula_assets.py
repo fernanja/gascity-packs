@@ -3693,6 +3693,54 @@ class FormulaAssetTests(unittest.TestCase):
                 with self.subTest(file=rel, fragment=fragment):
                     self.assertIn(fragment, review)
 
+    def test_plan_reviews_check_the_rig_product_invariants(self) -> None:
+        # gc-4asa1t: R19 shipped a hierarchy violation that a design prompt
+        # stated and no plan review checked against the rig's invariants.
+        for rel in (
+            "build-from-plan-base/plan-review.md",
+            "build-basic/plan-review.md",
+            "build-base/plan-review.md",
+            "planning-base/plan-review.md",
+        ):
+            flat = " ".join(self._prose(rel).split())
+            for fragment in (
+                'read the section titled "Product Invariants" in the rig root `CLAUDE.md`',
+                "When the file or the section is absent, say so in the review.",
+                "A requirement or plan step that contradicts an invariant is a `must-address` note naming the invariant and the conflicting text",
+                "the invariant wins over requirements text, design prompts and boards",
+                "the verdict is `changes_required` and you mail the mayor at once with both texts",
+            ):
+                with self.subTest(file=rel, fragment=fragment):
+                    self.assertIn(fragment, flat)
+
+    def test_plans_read_the_rig_product_invariants_and_record_conflicts(self) -> None:
+        for rel in ("build-from-plan-base/plan.md", "build-basic/plan.md"):
+            flat = " ".join(self._prose(rel).split())
+            for fragment in (
+                'Read the section titled "Product Invariants" in the rig root `CLAUDE.md`',
+                "plan to the invariant and record the conflict under a `## Invariant conflicts` heading in the plan",
+            ):
+                with self.subTest(file=rel, fragment=fragment):
+                    self.assertIn(fragment, flat)
+
+    def test_publish_scratch_worktree_installs_dependencies_before_any_push(self) -> None:
+        # gc-ogmkzd: three pushes died with `eslint: command not found` in a
+        # fresh scratch worktree and each cost a ~10-minute pre-push gate run.
+        for rel in ("build-from-review-base/publish.md", "github-issue-fix-base/publish-pr.md"):
+            flat = " ".join(self._prose(rel).split())
+            for fragment in (
+                "gc-ogmkzd",
+                "`make worktree-deps`",
+                "one retry after 30 seconds",
+                "`gc.failure_class=hard`",
+                "`eslint: command not found`",
+            ):
+                with self.subTest(file=rel, fragment=fragment):
+                    self.assertIn(fragment, flat)
+        flat = " ".join(self._prose("build-from-review-base/publish.md").split())
+        self.assertIn("make review-worktree SHA=<sha> DIR=<path>", flat)
+        self.assertIn("Before any push, provision the publish worktree", flat)
+
     def test_plans_list_consumers_with_the_search_that_found_them(self) -> None:
         for rel in ("build-from-plan-base/plan.md", "build-basic/plan.md"):
             plan = self._prose(rel)

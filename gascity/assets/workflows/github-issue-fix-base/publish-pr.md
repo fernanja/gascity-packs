@@ -37,6 +37,12 @@ a **draft** first, then:
    tip as the head. Never more than one such commit per publish; if the new tip
    still shows no run after the wait, fail the step: `gc.outcome=fail`,
    `gc.failure_class=hard`, and a `gc.failure_reason` naming the head sha.
+   Provision that scratch worktree before the push (gc-ogmkzd): when
+   `make -n worktree-deps` succeeds in it, run `make worktree-deps` there with
+   one retry after 30 seconds, and when it still fails, fail the step
+   (`gc.outcome=fail`, `gc.failure_class=hard`, reason naming `make
+   worktree-deps` and its exit code). A fresh worktree without dependencies
+   fails the pre-push hooks (`eslint: command not found`).
 4. Wait for CI on the head (`gh pr checks <number> --watch --interval 30`, time
    bounded), then judge it with the pinned gate script in manual mode:
    `{{pack_root}}/assets/scripts/checks/pr-ci-green.sh --repo <owner>/<repo> --pr <number> --commit <sha>`
