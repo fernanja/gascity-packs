@@ -48,22 +48,23 @@ run only after a failed first one, and only for the failure.
 
 **Live-suite failures that are not findings (gc-aecuvz).** A full-suite run
 meets a live host, so classify each failing test before raising it, and record
-every command and exit code you use. Three classes:
+every command and exit code you use. Run each selected suite to completion in
+one pass, so that every failure surfaces in one round: never pass
+`--max-failures`, `-x`, `--bail` or any equivalent stop-at-first-failure flag in
+a review run (a run that stops at the first failure shows one unrelated failure
+per fix loop: five loops on one build, fix-loop deep dive 2026-10-22). Three
+classes:
 
-1. Touched module: the failing spec, or anything it depends on, is in
-   `git diff --name-only $(git merge-base origin/<base-branch> HEAD) HEAD`.
-   "Anything it depends on" is explicit: the spec file, its fixtures, helpers
-   and page objects, global setup and teardown, test and framework config,
-   generated clients, and every module the failing spec imports, directly or
-   transitively. If the branch changed any of them, the module is TOUCHED.
-   `<base-branch>` is the PR's `baseRefName` when a PR exists, else the rig's
-   default branch (`git symbolic-ref --short refs/remotes/origin/HEAD`, minus
-   the `origin/` prefix). On a stacked branch, merge-base against that base
-   branch, not against the parent branch. A touched module blocks, as before:
-   a required finding. The flake-log rule for a touched module is unchanged
-   (a one-off failure that does not reproduce on an immediate retry is
-   logged; one that reproduces is fixed in the build).
-2. Environment failure: ALL of these hold. The module is not touched by the
+1. Changed spec: the failing test's own spec file is in
+   `git diff --name-only $(git merge-base origin/<base-branch> HEAD) HEAD`, or
+   the build added it. `<base-branch>` is the PR's `baseRefName` when a PR
+   exists, else the rig's default branch (`git symbolic-ref --short
+   refs/remotes/origin/HEAD`, minus the `origin/` prefix). On a stacked branch,
+   merge-base against that base branch, not against the parent branch. A
+   changed spec blocks, as before: a required finding. The flake-log rule for a
+   changed spec is unchanged (a one-off failure that does not reproduce on an
+   immediate retry is logged; one that reproduces is fixed in the build).
+2. Environment failure: ALL of these hold. The spec is not changed by the
    branch. The collector recorded the failing request's URL or origin, and it
    is a THIRD-PARTY origin: not `localhost`, not `127.0.0.1`, not the rig's
    dev, API or e2e base-URL ports. The error is a Chromium network-stack code
@@ -77,22 +78,27 @@ every command and exit code you use. Three classes:
    error code, failing origin, retry command, retry exit code). It is not a
    finding and does not change the verdict. If the retry fails too, it is
    class 3 or class 1.
-3. Pre-existing: a reproducible failure in an untouched module that is not
-   class 2. Run the same test on a detached worktree of `origin/<base-branch>`
+3. Untouched spec: the failing test's spec file is NOT in that diff and the
+   build did not add it, even when a fixture, helper, page object, config
+   file, generated client or imported module the spec uses is, and the failure
+   is not class 2. It is a required finding only when a differential check
+   shows the branch causes it. Run the identical command 2 times on the head
+   under review and 2 times on a detached worktree of `origin/<base-branch>`
    (`make review-worktree SHA=<base sha> DIR=<path>`), with the application
    under test built and served FROM that base worktree (`make dev` run in
    that worktree, on its own ports, with the test pointed at them through
    `E2E_BASE_URL` and `E2E_DJANGO_URL`), never the branch's dev server that
-   may still be running. Pre-existing means the SAME test fails on the base
-   with the SAME assertion and error text; a different failure on the base is
-   not a match. Record both error texts side by side. When it matches, file
-   one bead for it (`gc bd create`, with the test id, both error texts, and
-   both commands and exit codes) and list it under a `Pre-existing` heading
-   in the Verification section with the bead id. It is not a finding against
-   this branch. When it passes on the base branch, or fails there differently,
-   the branch causes it: a required finding.
+   may still be running. Branch-caused means it fails 2/2 on the branch AND
+   passes 2/2 on the base: a required finding. Any other outcome (it fails on
+   the base too, passes on the branch, or the runs disagree) is not a finding
+   against this branch. One passing base run does not prove the branch is at
+   fault. File one bead for it, or add the runs to the bead that already
+   tracks that test (`gc bd create`, with the test id, both run sets, the
+   commands and exit codes, and the error text of each failing run), and list
+   it under a `Pre-existing or flaky` heading in the Verification section with
+   the bead id.
 
-Never use classes 2 and 3 for a touched module, for a first failure you did
+Never use class 2 or class 3 for a changed spec, for a first failure you did
 not retry, or for a timeout or connection error against the rig's own server.
 
 The preflight gate is not a test run for every kind of change. Find out what it

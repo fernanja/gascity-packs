@@ -3548,20 +3548,27 @@ class FormulaAssetTests(unittest.TestCase):
         block = self._flat(canonical[start:end])
         for fragment in (
             "git diff --name-only $(git merge-base origin/<base-branch> HEAD) HEAD",
-            "A touched module blocks, as before: a required finding.",
+            "A changed spec blocks, as before: a required finding.",
             "`<base-branch>` is the PR's `baseRefName` when a PR exists",
             "`git symbolic-ref --short refs/remotes/origin/HEAD`",
             "merge-base against that base branch, not against the parent branch",
-            "its fixtures, helpers and page objects, global setup and teardown",
-            "generated clients, and every module the failing spec imports, directly or transitively",
-            "the module is TOUCHED",
+            "the failing test's own spec file is in",
+            "or the build added it",
+            "the failing test's spec file is NOT in that diff and the build did not add it",
+            "even when a fixture, helper, page object, config file, generated client or imported module the spec uses is",
             "is a THIRD-PARTY origin: not `localhost`",
             "When no URL or origin was recorded, the failure is NOT class 2",
             "`make review-worktree SHA=<base sha> DIR=<path>`",
             "built and served FROM that base worktree",
             "never the branch's dev server",
-            "the SAME test fails on the base with the SAME assertion and error text",
-            "Record both error texts side by side.",
+            "Run the identical command 2 times on the head under review and 2 times on a detached worktree",
+            "Branch-caused means it fails 2/2 on the branch AND passes 2/2 on the base: a required finding.",
+            "Any other outcome (it fails on the base too, passes on the branch, or the runs disagree) is not a finding against this branch.",
+            "One passing base run does not prove the branch is at fault.",
+            "or add the runs to the bead that already tracks that test",
+            "the error text of each failing run",
+            "Run each selected suite to completion in one pass, so that every failure surfaces in one round",
+            "never pass `--max-failures`, `-x`, `--bail` or any equivalent stop-at-first-failure flag in a review run",
             "net::ERR_INTERNET_DISCONNECTED",
             "`ERR_NAME_NOT_RESOLVED`",
             "`ERR_CONNECTION_*`",
@@ -3572,10 +3579,10 @@ class FormulaAssetTests(unittest.TestCase):
             "`Permitted/environment` heading",
             "It is not a finding and does not change the verdict.",
             "detached worktree of `origin/<base-branch>`",
-            "file one bead for it",
-            "`Pre-existing` heading",
-            "The flake-log rule for a touched module is unchanged",
-            "Never use classes 2 and 3 for a touched module",
+            "File one bead for it, or add the runs",
+            "`Pre-existing or flaky` heading",
+            "The flake-log rule for a changed spec is unchanged",
+            "Never use class 2 or class 3 for a changed spec, for a first failure you did not retry",
             "for a timeout or connection error against the rig's own server",
         ):
             with self.subTest(fragment=fragment):
@@ -3598,6 +3605,26 @@ class FormulaAssetTests(unittest.TestCase):
         ):
             with self.subTest(file=rel):
                 self.assertIn(raw, (root / rel).read_text(encoding="utf-8"))
+        # The old rules are gone from every copy: a transitive-import touch no
+        # longer blocks by itself, and one passing base run no longer proves
+        # the branch is at fault.
+        for rel in (
+            "assets/workflows/build-base/review.md",
+            "assets/workflows/build-from-review-base/review.md",
+            "assets/workflows/fix-loop-base/re-review.md",
+            "assets/workflows/review/write-report.md",
+        ):
+            flat = self._flat((root / rel).read_text(encoding="utf-8"))
+            for stale in (
+                "directly or transitively",
+                "the module is TOUCHED",
+                "A touched module blocks",
+                "the SAME test fails on the base with the SAME assertion",
+                "When it passes on the base branch, or fails there differently, the branch causes it",
+                "`Pre-existing` heading",
+            ):
+                with self.subTest(file=rel, stale=stale):
+                    self.assertNotIn(stale, flat)
 
     def test_repair_decision_and_fix_plan_skip_unblocking_live_suite_items(self) -> None:
         root = pathlib.Path(__file__).resolve().parents[1]
@@ -3605,18 +3632,100 @@ class FormulaAssetTests(unittest.TestCase):
             (root / "assets/workflows/build-from-review-base/decide-repair.md").read_text(encoding="utf-8")
         )
         for fragment in (
-            "Environment and pre-existing items are not findings (gc-aecuvz).",
-            "`Permitted/environment` or `Pre-existing` headings",
-            "do not make it `changes_required` and do not earn another loop",
-            "the same assertion and error text as on the branch",
+            "Environment, pre-existing and flaky items are not findings (gc-aecuvz).",
+            "`Permitted/environment` or `Pre-existing or flaky` headings",
+            "they do not make it `changes_required` and do not earn another loop",
+            "the identical command run 2 times on the head under review and 2 times on the base",
             "served from a base worktree, not the branch's dev server",
-            "An item that lacks that evidence is an unresolved finding: treat the verdict as `changes_required`.",
-            "A failure in a module the branch changed is never reclassified here.",
+            "or that failed 2/2 on the branch and passed 2/2 on the base, is an unresolved finding: treat the verdict as `changes_required`.",
+            "A failure in a spec the branch changed or added is never reclassified here.",
         ):
             with self.subTest(step="decide-repair", fragment=fragment):
                 self.assertIn(fragment, decide)
         plan = self._flat((root / "assets/workflows/fix-loop-base/plan-fixes.md").read_text(encoding="utf-8"))
-        self.assertIn("Do not plan a fix for an item the review lists under `Permitted/environment` or `Pre-existing`", plan)
+        self.assertIn("Do not plan a fix for an item the review lists under `Permitted/environment` or `Pre-existing or flaky`", plan)
+
+    # Fix-loop rules (gc-v38udp, fix-loop deep dive 2026-10-22, Jon options
+    # 1-3): the reviewer's own passing run supersedes a stale worker record, a
+    # fix plan never bounds a gate below the gate's own timeout, plan review
+    # rejects happy-path-only checks, plans list consumers with the search that
+    # found them, and an implementation does not start against requirements
+    # amended after the plan.
+    def _prose(self, rel: str) -> str:
+        root = pathlib.Path(__file__).resolve().parents[1]
+        return self._flat((root / "assets" / "workflows" / rel).read_text(encoding="utf-8"))
+
+    def test_review_evidence_supersedes_stale_worker_record(self) -> None:
+        review = self._prose("build-from-review-base/review.md")
+        for fragment in (
+            "A requirement the implementation summary marks deferred, not run, skipped",
+            "Your own evidence supersedes a stale worker record.",
+            "on the exact head under review and recorded a passing exit code in Verification, the requirement is satisfied",
+            "is a note, not a finding, and it earns no fix loop",
+            "name the Verification line that supersedes it",
+        ):
+            with self.subTest(fragment=fragment):
+                self.assertIn(fragment, review)
+
+    def test_fix_plan_bounds_and_instance_lists(self) -> None:
+        plan = self._prose("fix-loop-base/plan-fixes.md")
+        for fragment in (
+            "must be at least that gate's own configured timeout",
+            "the plan cites where that timeout is defined",
+            "A bound shorter than the gate fails a correct run and earns another loop",
+            "gcas-h90y68w, gcas-qe32i81 and gcas-3msxtwu",
+            "lists every other instance of that class with the search that found them (the command and its hit count)",
+        ):
+            with self.subTest(fragment=fragment):
+                self.assertIn(fragment, plan)
+
+    def test_plan_review_rejects_happy_path_only_checks(self) -> None:
+        for rel in ("build-from-plan-base/plan-review.md", "build-basic/plan-review.md"):
+            review = self._prose(rel)
+            for fragment in (
+                "A check, test or probe in the plan that cannot fail when the mechanism it verifies is wrong is `must-address`, never `advisory`.",
+                "It cannot fail when it exercises only the path the mechanism itself implements",
+                "Name the counter-case to add in the note",
+                "Re-run the plan's consumer searches.",
+                "Re-run at least one of those searches yourself",
+                "is a `must-address` note that names the search and both counts",
+            ):
+                with self.subTest(file=rel, fragment=fragment):
+                    self.assertIn(fragment, review)
+
+    def test_plans_list_consumers_with_the_search_that_found_them(self) -> None:
+        for rel in ("build-from-plan-base/plan.md", "build-basic/plan.md"):
+            plan = self._prose(rel)
+            for fragment in (
+                "List the consumers of every change.",
+                "For every changed interface, test id, selector, helper, CLI flag, file path or config key",
+                "states the exact search command that found them and its hit count",
+                "Plan review re-runs at least one of these searches, and a mismatch is a `must-address` note.",
+            ):
+                with self.subTest(file=rel, fragment=fragment):
+                    self.assertIn(fragment, plan)
+
+    def test_implementation_stops_when_requirements_changed_after_plan(self) -> None:
+        for rel in (
+            "do-work/implement.md",
+            "do-work-item/implement-item.md",
+            "implementation-base/implement.md",
+            "implementation-item-base/implement-item.md",
+            "fix-loop-base/apply-fixes.md",
+        ):
+            prose = self._prose(rel)
+            for fragment in (
+                "Requirements amended after planning (requirements_changed_after_plan).",
+                "(`shasum -a 256 <requirements path>` against a `sha256:<digest>` entry)",
+                "compare the file's `updated_at` with the one the plan recorded",
+                "do not implement against the stale plan",
+                "Mail the mayor with both values",
+                "`gc.failure_class=requirements_changed_after_plan`",
+                "close this step as blocked and not retryable",
+                "only a recorded mismatch stops the step",
+            ):
+                with self.subTest(file=rel, fragment=fragment):
+                    self.assertIn(fragment, prose)
 
     # gc-mpaqx: review runs after the work-item bead has closed, and the
     # engine's reapClosedBeadWorktrees removes a closed bead's worktree under

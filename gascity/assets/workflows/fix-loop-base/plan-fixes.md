@@ -21,7 +21,22 @@ Plan each fix at the level of the mechanism, not the instance the review named.
   failed: do not refine it again. Change the approach, and say in the plan what
   was wrong with the previous one.
 - Do not plan a fix for an item the review lists under `Permitted/environment`
-  or `Pre-existing`: those are not findings (gc-aecuvz). Plan only the findings.
+  or `Pre-existing or flaky`: those are not findings (gc-aecuvz). Plan only the
+  findings.
+- A fix that fixes one instance of a demonstrated defect class lists every other
+  instance of that class with the search that found them (the command and its
+  hit count), and fixes them in the same pass or says why one is out of reach.
+  A plan that fixes the named instance and lists no search is incomplete
+  (product-fixes, bug-bash round 8: each round fixed the instance named and the
+  next review found its neighbour).
+- Any timeout, wall-clock bound, cap or wait the plan prescribes for a gate,
+  suite or command must be at least that gate's own configured timeout, and the
+  plan cites where that timeout is defined (file and line, or the config key).
+  A bound shorter than the gate fails a correct run and earns another loop
+  (three builds looped on a 1200, 1800 and 300 second cap below the gate:
+  gcas-h90y68w, gcas-qe32i81 and gcas-3msxtwu, fix-loop deep dive 2026-10-22).
+  When you cannot find the gate's timeout, do not invent a smaller one:
+  prescribe no bound and say so.
 - List what the fix deliberately does not cover, so the re-review can judge
   that boundary instead of discovering it.
 

@@ -144,18 +144,19 @@ fresh `git rev-parse HEAD` as `gc.build.review_subject_commit`, so publish
 pushes the final HEAD. A diff that changes code or test behaviour always gets
 a real re-review; this rule never skips one.
 
-**Environment and pre-existing items are not findings (gc-aecuvz).** When the
-most recent re-review lists live-suite failures only under its
-`Permitted/environment` or `Pre-existing` headings (see "Live-suite failures
-that are not findings" in `review.md`), they do not make it `changes_required`
-and do not earn another loop. Check each listed item once: an environment item
-names its failing third-party origin and its retry command with exit code 0; a
-pre-existing item names a bead id and records the same test failing on the
-base branch with the same assertion and error text as on the branch (both
-texts side by side), served from a base worktree, not the branch's dev
-server. An item that lacks that evidence is an unresolved finding: treat the
-verdict as `changes_required`. A failure in a module the branch changed is
-never reclassified here.
+**Environment, pre-existing and flaky items are not findings (gc-aecuvz).** When
+the most recent re-review lists live-suite failures only under its
+`Permitted/environment` or `Pre-existing or flaky` headings (see "Live-suite
+failures that are not findings" in `review.md`), they do not make it
+`changes_required` and do not earn another loop. Check each listed item once:
+an environment item names its failing third-party origin and its retry command
+with exit code 0; a pre-existing or flaky item names a bead id and records the
+identical command run 2 times on the head under review and 2 times on the base,
+served from a base worktree, not the branch's dev server, with each run's exit
+code. An item that lacks that evidence, or that failed 2/2 on the branch and
+passed 2/2 on the base, is an unresolved finding: treat the verdict as
+`changes_required`. A failure in a spec the branch changed or added is never
+reclassified here.
 
 A repair for an intermittent or timing failure must show the pre-fix code
 failing and the post-fix code passing under the same reproduction method. When

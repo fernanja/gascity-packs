@@ -30,6 +30,23 @@ Treat an acceptance criterion with no observation method, or one the test
 environment cannot observe with no stated alternative verification, as a
 blocking finding.
 
+A check, test or probe in the plan that cannot fail when the mechanism it
+verifies is wrong is `must-address`, never `advisory`. It cannot fail when it
+exercises only the path the mechanism itself implements (a checksum loop that
+prints ok for a swapped archive; a crash-sweep probe that only runs when no
+crash happened). Name the counter-case to add in the note: the input or state
+for which the mechanism is wrong and the check must fail. Plan review rated
+these advisory twice and both reached review as defects (native-verification
+checksum loop, gcas-8kiek63 implementation-plan.md:247-251; test-slot crash
+sweep probe, gcas-fip716u :270-273 and :401-404).
+
+Re-run the plan's consumer searches. The plan lists, for every changed
+interface, test id, selector, helper, CLI flag, file path or config key, all of
+its consumers with the exact search command and its hit count. Re-run at least
+one of those searches yourself, on the current base branch, and compare the hit
+count. A count that differs, or a changed item that has no listed search, is a
+`must-address` note that names the search and both counts.
+
 Mark every specific, actionable note (e.g. "measure first", "X is the page's
 responsibility") as `advisory` or `must-address`, and list the must-address
 notes under `## Must-Address Notes` in the plan-review artifact

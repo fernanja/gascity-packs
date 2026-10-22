@@ -36,6 +36,28 @@ naming both heads. When the branch does not exist on origin (a workflow
 that does not publish never pushed it), there is nothing to fast-forward to:
 continue.
 
+Requirements amended after planning (requirements_changed_after_plan). Before
+you start, read the requirements path from the workflow root
+(`gc.build.requirements_path`, fallback `gc.var.requirements_path`) and the
+`trace.upstream` entry for that file in the build's implementation plan
+(`gc.build.plan_path`, fallback `gc.var.plan_path`). Compare the file as it is
+now with the version the plan recorded: recompute the hash with the plan's scheme
+(`shasum -a 256 <requirements path>` against a `sha256:<digest>` entry), or
+compare the file's `updated_at` with the one the plan recorded. When they
+differ, the plan was written against other requirements: do not implement
+against the stale plan. Mail the mayor with both values (`gc mail send mayor -s
+"requirements changed after plan: <workflow-root-id>" -m "<requirements path>,
+plan recorded <recorded hash or updated_at>, file now <current hash or
+updated_at>"`). Record the stop on the workflow root with
+`gc.build.status=blocked`, `gc.build.blocked_step=<this step id>` and
+`gc.failure_class=requirements_changed_after_plan`, then close this step as
+blocked and not retryable (a retry reads the same two files):
+`gc bd update "<claimed-step-id>" --set-metadata gc.outcome=fail --set-metadata gc.failure_class=hard --set-metadata "gc.failure_reason=requirements_changed_after_plan: <both values>"`
+and `gc bd close "<claimed-step-id>"`. When no plan or no requirements path is
+recorded, or the plan records neither a hash nor an `updated_at` you can
+recompute, say so in the summary and continue: only a recorded mismatch stops
+the step.
+
 Hand the fix to re-review by local commit (reviewer-first, gc-gef2p8). The
 launcher passes the build's publishing intent as push {{push}} and open_pr
 {{open_pr}}. CI does not run between a fix pass and its re-review: the

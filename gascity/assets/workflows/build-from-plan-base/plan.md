@@ -24,6 +24,14 @@ at the consumer-facing layer, not only on the primitive. When this build is one
 part of a multi-part effort, list each dependency on an earlier part's
 deliverable with its concrete call path.
 
+List the consumers of every change. For every changed interface, test id,
+selector, helper, CLI flag, file path or config key, the plan lists all of its
+consumers and states the exact search command that found them and its hit
+count (for example `rg -n 'data-testid="sheet-close"' --glob '!node_modules'`:
+14 hits in 6 files). A consumer found by reading is not listed without the
+search. Plan review re-runs at least one of these searches, and a mismatch is
+a `must-address` note.
+
 Name how each acceptance criterion is observed: the test, command, or
 measurement that proves it, and confirm the test environment can actually
 observe it (e.g. headless Chromium never draws classic scrollbars, so a
