@@ -45,6 +45,14 @@ right commit without checking. Follow this protocol exactly:
    verdict. If it is missing, fail closed (`gc.outcome=fail`,
    `gc.failure_class=hard`, reason `missing review_subject_commit`) rather
    than guessing from `implementation_summary_path` or any other artifact.
+   Before any push, also read the review report at `gc.build.review_report_path`
+   (a Markdown file; read the `subject_commit` key in its front matter). When
+   the report carries `subject_commit` and it differs from
+   `gc.build.review_subject_commit`, fail closed and never pick one:
+   `gc.outcome=fail`, `gc.failure_class=hard`, `gc.failure_reason=review subject
+   mismatch: root review_subject_commit <sha> vs report subject_commit <sha>`
+   naming both shas (gc-185gyl: a fix pass advanced the branch and the root kept
+   the older commit). A report without `subject_commit` is not a mismatch.
 2. Resolve the actual remote state with `git ls-remote origin <branch>` --
    not a locally cached ref, not a "was pushed" flag from a previous
    publish attempt. Compare its commit to `gc.build.review_subject_commit`.

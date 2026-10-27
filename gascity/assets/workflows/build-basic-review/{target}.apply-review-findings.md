@@ -54,6 +54,23 @@ is explicit.
 
 Contract: `gc.work_dir` is the launcher rig root, not the implementation worktree.
 
+When this pass changes code or tests, hand the result to the next review and to
+publish by local commit (gc-185gyl: a fix pass advanced the branch while the
+workflow root kept the pre-fix commit, and publish named the wrong one). A
+no-op pass records nothing here. In the implementation worktree:
+
+1. Commit on the branch under repair. The subject carries the tag `[skip ci]`,
+   for example `fix: keep row taps on phones [skip ci]`; CI runs once, on the
+   approved commit, in the publish step.
+2. Record the commit on the workflow root (resolve it from `gc.root_bead_id`
+   on this step bead):
+   `gc bd update "<workflow-root-id>" --set-metadata "gc.build.handoff_commit=$(git rev-parse HEAD)" --set-metadata "gc.build.handoff_branch=<branch>"`.
+3. When the root's `gc.var.push` is `true`, make exactly one checkpoint push,
+   for durability: `git push origin <branch>`, fast-forward only, pre-push
+   hooks running. Do not run `gh pr create` and do not touch an existing pull
+   request; opening it, waiting for its checks and marking it ready belong
+   exclusively to the publish step.
+
 Set `code_review.verdict=done` only when acceptance, test evidence,
 simplicity, and preflight all approve after this pass, or under the
 wording-only rule above. Set `code_review.verdict=iterate` when required fixes

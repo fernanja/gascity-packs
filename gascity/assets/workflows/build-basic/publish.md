@@ -21,6 +21,13 @@ gc bd update "$CLAIMED_BEAD_ID" \
 gc bd close "$CLAIMED_BEAD_ID" --reason 'Publishing disabled; build-basic result approved.'
 ```
 
+Before any push, read the review report at `gc.build.review_report_path` and
+compare its front matter `subject_commit` with the root's
+`gc.build.review_subject_commit`. When both exist and differ, fail closed with
+`gc.outcome=fail`, `gc.failure_class=hard` and a reason naming both shas; never
+pick one (gc-185gyl). The comparison and the rest of the commit-resolution
+protocol are in `assets/workflows/build-from-review-base/publish.md`.
+
 When push and open_pr are both enabled, the implementation step made only a
 `[skip ci]` checkpoint push and opened no pull request (reviewer-first,
 gc-gef2p8); this step runs CI, once. Push the approved branch head WITHOUT the

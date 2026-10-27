@@ -16,6 +16,11 @@ file.
 
 Contract: `gc.work_dir` is the launcher rig root, not the implementation worktree.
 
+Name the subject the synthesis judged, on one line, `Subject: <sha> on
+<branch>`: the sha is `git -C <implementation worktree> rev-parse HEAD`,
+resolved when you write the synthesis, and the finalize step compares it with
+the worktree head before it records the approved subject (gc-185gyl).
+
 Verify load-bearing facts before any wording concern: the SHAs, what actually
 failed, and the failing code's content at the failure SHA. Correct or drop a
 finding whose facts are wrong before carrying it forward.

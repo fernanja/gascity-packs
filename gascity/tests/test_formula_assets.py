@@ -3679,6 +3679,44 @@ class FormulaAssetTests(unittest.TestCase):
             with self.subTest(fragment=fragment):
                 self.assertIn(fragment, plan)
 
+    def test_build_basic_review_hands_the_approved_subject_to_publish(self) -> None:
+        # gc-185gyl: a starter-review fix advanced the branch while the root kept the pre-fix commit.
+        review = "build-basic-review/{target}"
+        expected = {
+            f"{review}.apply-review-findings.md": (
+                "gc.build.handoff_commit=$(git rev-parse HEAD)",
+                "gc.build.handoff_branch",
+                "`[skip ci]`",
+                "make exactly one checkpoint push",
+                "A no-op pass records nothing here.",
+            ),
+            f"{review}.md": (
+                "gc.build.review_subject_commit=<sha>",
+                "gc.build.review_subject_branch=<branch>",
+                "git -C <worktree> rev-parse HEAD",
+                "never copied from the setup step's value",
+                "equals the sha on the synthesis's `Subject:` line",
+                "subject_commit: <sha>",
+            ),
+            f"{review}.synthesize-review.md": ("`Subject: <sha> on <branch>`",),
+            "build-from-review-base/publish.md": (
+                "`subject_commit` key in its front matter",
+                "fail closed and never pick one",
+                "review subject mismatch: root review_subject_commit <sha> vs report subject_commit <sha>",
+                "naming both shas",
+            ),
+            "build-basic/publish.md": (
+                "compare its front matter `subject_commit` with the root's",
+                "fail closed",
+                "a reason naming both shas; never pick one",
+            ),
+        }
+        for rel, fragments in expected.items():
+            text = self._prose(rel)
+            for fragment in fragments:
+                with self.subTest(file=rel, fragment=fragment):
+                    self.assertIn(fragment, text)
+
     def test_plan_review_rejects_happy_path_only_checks(self) -> None:
         for rel in ("build-from-plan-base/plan-review.md", "build-basic/plan-review.md"):
             review = self._prose(rel)

@@ -7,6 +7,20 @@ Use `gc bd update "<workflow-root-id>" --set-metadata "gc.build.review_report_pa
 Do not use `gc bd update --metadata 'key=value'`; `--metadata` only accepts a JSON
 object.
 
+When the latest synthesis approves, also record the approved subject on the
+same root, in the same update as `gc.build.review_report_path`:
+`--set-metadata "gc.build.review_subject_commit=<sha>" --set-metadata "gc.build.review_subject_branch=<branch>"`.
+Resolve the sha fresh right now from the implementation worktree named in the
+review context, `git -C <worktree> rev-parse HEAD` -- never copied from the
+setup step's value, an earlier pass, `gc.build.handoff_commit` or any other
+prior record (the fix pass advances the branch after setup recorded its
+value). Verify it equals the sha on the synthesis's `Subject:` line; when they
+differ, the approval does not cover the head: do not approve, write
+`status: changes_required`. When the worktree is gone, use
+`gc.build.handoff_commit` and say so in the report (gc-185gyl). Put the same
+sha in the review report front matter as `subject_commit: <sha>`; publish
+compares the two.
+
 Review approval is based on the implementation source anchor/worktree recorded
 in the review context and canonical implementation summary. Do not downgrade the
 review to `changes_required` because the launcher rig root has not been mutated;
