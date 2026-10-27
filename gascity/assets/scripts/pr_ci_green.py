@@ -50,7 +50,14 @@ What green means, for the commit at the pull request head:
   root, the workflow intends to publish and no pull request exists yet, the
   gate says and records `reviewer-first: CI deferred to publish` and exits 0.
   With no recorded hand-off and no pull request it still fails, telling the
-  worker to record it. A pull request that does exist is judged as above.
+  worker to record it. A pull request that does exist is judged as above,
+  with one exception (gc-q0y5zw): a DRAFT pull request whose head is the
+  recorded hand-off and whose commit message carries a skip-CI tag
+  (`[skip ci]`, `[ci skip]`, `[no ci]`, `[skip actions]`, `[actions skip]` or a
+  `skip-checks: true` trailer) has no checks and never will, so the gate defers
+  exactly as with no pull request. A ready pull request, a head that is not the
+  hand-off, an untagged head, or a message that cannot be read is judged on its
+  checks.
   Manual mode is unchanged: the publish step uses it to wait for the checks.
 
 The script never waits for CI: the worker does that before closing its step,
@@ -417,6 +424,26 @@ def same_sha(left: str, right: str) -> bool:
     if not left or not right:
         return False
     return left.startswith(right) or right.startswith(left)
+
+
+# The vocabulary of checks/handoff-commit-ancestor.sh: a commit carrying one of
+# these makes GitHub skip the push and pull_request workflows.
+SKIP_CI_RE = re.compile(r"\[(skip ci|ci skip|no ci|skip actions|actions skip)\]|^skip-checks: true[ \t]*$", re.IGNORECASE | re.MULTILINE)
+
+
+def commit_message(gh: GitHub, repo: str, commit: str, dirs: list[str]) -> str:
+    """The full message of `commit`: the local clone first (the hand-off commit is
+    verified to exist there and costs no API call), GitHub second, "" when neither has it."""
+    for directory in dirs:
+        if directory and os.path.isdir(directory):
+            message = git(["log", "-1", "--format=%B", commit], directory)
+            if message.strip():
+                return message
+    try:
+        found = gh.api(f"repos/{repo}/commits/{commit}")
+    except NotOnGitHub:
+        return ""
+    return str((found.get("commit") or {}).get("message", "")) if isinstance(found, dict) else ""
 
 
 def pulls_for_commit(gh: GitHub, repo: str, commit: str, any_state: bool) -> list[dict[str, Any]]:
@@ -996,6 +1023,18 @@ def gate_mode(bead_id: str, state: dict[str, Any]) -> str:
             "then close the step again"
         )
     head = str((pull.get("head") or {}).get("sha", ""))
+    if recorded_commit and intent and pull.get("draft") and head and same_sha(head, recorded_commit):
+        # The checkpoint push of a reviewer-first hand-off can land on a branch
+        # that already has a draft pull request (a stranded build, an earlier
+        # attempt). The head is the tagged hand-off, so no check will ever
+        # report on it: the same deferral as when no pull request exists
+        # (gc-q0y5zw, gcas-o2vjxdt). An unreadable message is not a deferral.
+        message = commit_message(gh, repo, head, [worktree, os.environ.get("GC_WORK_DIR", ""), os.environ.get("GC_STORE_PATH", ""), os.getcwd()])
+        if SKIP_CI_RE.search(message):
+            raise Deferred(
+                f"reviewer-first: CI deferred to publish (handoff commit {recorded_commit[:12]} on {branch or 'an unrecorded branch'}; "
+                f"draft pull request {repo}#{pull.get('number')} at a skip-ci checkpoint; {intent_note})"
+            )
     if not may_push and commit and head and not same_sha(head, commit):
         # The workflow was told not to push, so the handoff commit is local.
         # The pull request that exists is at another commit and its checks say

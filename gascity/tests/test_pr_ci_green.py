@@ -172,6 +172,11 @@ class Fixture:
         self.base_checks([base_run("ci-gate")])
         self.base_history([])
 
+    def retag_head(self, message: str = "widget") -> None:
+        """Rewrite the head commit's message (the Fixture's head says `[skip ci]`) and follow the new sha."""
+        self.git("commit", "--amend", "-q", "-m", message)
+        self.head = self.git("rev-parse", "HEAD")
+
     def git(self, *args: str) -> str:
         proc = subprocess.run(
             ["git", "-C", str(self.repo), "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", *args],
@@ -241,6 +246,14 @@ class Fixture:
             self.route(
                 f"repos/{REPO}/pulls/{pull['number']}", {**pull, "mergeable": mergeable, "mergeable_state": mergeable_state}
             )
+
+    def commit_message(self, message: str | None, *, sha: str | None = None) -> None:
+        """What GitHub says the commit's message is; None means it cannot read the commit."""
+        path = f"repos/{REPO}/commits/{sha or self.head}"
+        if message is None:
+            self.route_error(path, NOT_FOUND)
+        else:
+            self.route(path, {"sha": sha or self.head, "commit": {"message": message}})
 
     def pull(self, *, number: int = 7, head: str | None = None, state: str = "open", draft: bool = True, ref: str = BRANCH) -> dict:
         return {
@@ -619,14 +632,86 @@ class ImplementationHandoffTests(PrCiGreenTestCase):
 
         self.assert_skipped(self.fx.run(), "nothing to publish")
 
-    def test_a_recorded_handoff_with_a_pull_request_is_judged_on_its_checks_not_deferred(self) -> None:
+    def handoff_with_pull_request(self, *, draft: bool = True, head: str | None = None, message: str | None = None) -> None:
+        """A recorded hand-off on a branch that already has a pull request (a stranded build).
+        `message` rewrites the head commit's message (the Fixture's head says `[skip ci]`)."""
+        if message is not None:
+            self.fx.retag_head(message)
         self.fx.implementation_item(root_extra={"gc.build.handoff_commit": self.fx.head, "gc.build.handoff_branch": BRANCH})
+        pull = self.fx.pull(draft=draft, head=head)
+        self.fx.pulls([pull])
+        self.fx.commit_pulls([pull])
+
+    def test_a_recorded_handoff_with_a_draft_pull_request_at_a_skip_ci_head_defers_ci_to_publish(self) -> None:
+        # gc-q0y5zw / gcas-o2vjxdt: the checkpoint head has no checks and never will.
+        self.handoff_with_pull_request()
+        self.fx.checks([])
+
+        result = self.fx.run()
+
+        self.assert_deferred(result, self.fx.head[:12])
+        self.assertIn(f"draft pull request {REPO}#7 at a skip-ci checkpoint", result.stdout)
+        self.assertIn(f"on {BRANCH}", result.stdout)
+
+    def test_the_skip_ci_vocabulary_matches_the_ancestor_check(self) -> None:
+        for message in ("fix\n\n[ci skip]", "fix [no ci]", "fix [skip actions]", "fix [actions skip]", "fix\n\nskip-checks: true"):
+            with self.subTest(message=message):
+                self.handoff_with_pull_request(message=message)
+                self.assert_deferred(self.fx.run(), self.fx.head[:12])
+
+    def test_a_ready_pull_request_at_the_hand_off_is_judged_not_deferred(self) -> None:
+        self.handoff_with_pull_request(draft=False)
+        self.fx.checks([])
+
+        result = self.fx.run()
+
+        self.assert_fail(result, "draft")
+        self.assertNotIn("CI deferred to publish", result.stdout)
+
+    def test_an_untagged_hand_off_head_with_a_draft_pull_request_is_judged_on_its_checks(self) -> None:
+        self.handoff_with_pull_request(message="widget: no tag here")
         self.fx.checks([check_run("ci-gate", status="in_progress", conclusion=None)])
 
         result = self.fx.run()
 
         self.assert_fail(result, "PENDING ci-gate")
         self.assertNotIn("CI deferred to publish", result.stdout)
+
+    def test_a_pull_request_head_that_is_not_the_hand_off_still_fails_head_mismatch(self) -> None:
+        other = "c" * 40
+        self.handoff_with_pull_request(head=other)
+        self.fx.checks([check_run("ci-gate")], sha=other)
+
+        result = self.fx.run()
+
+        self.assert_fail(result, "head")
+        self.assertNotIn("CI deferred to publish", result.stdout)
+
+    def test_an_unreadable_commit_message_is_not_a_deferral(self) -> None:
+        # Neither GitHub nor a local clone has the commit: judged on its checks.
+        unknown = "d" * 40
+        self.fx.fix_loop(commit=unknown, branch=BRANCH)
+        pull = self.fx.pull(head=unknown)
+        self.fx.pulls([pull])
+        self.fx.commit_pulls([pull], sha=unknown)
+        self.fx.commit_message(None, sha=unknown)
+        self.fx.checks([check_run("ci-gate", status="in_progress", conclusion=None)], sha=unknown)
+
+        result = self.fx.run()
+
+        self.assert_fail(result, "PENDING ci-gate")
+        self.assertNotIn("CI deferred to publish", result.stdout)
+
+    def test_a_message_only_github_has_is_read_from_the_api(self) -> None:
+        unknown = "e" * 40
+        self.fx.fix_loop(commit=unknown, branch=BRANCH)
+        pull = self.fx.pull(head=unknown)
+        self.fx.pulls([pull])
+        self.fx.commit_pulls([pull], sha=unknown)
+        self.fx.commit_message("remote only [skip ci]", sha=unknown)
+        self.fx.checks([], sha=unknown)
+
+        self.assert_deferred(self.fx.run(), unknown[:12])
 
     def test_a_recorded_handoff_without_publishing_intent_and_no_pull_request_is_a_plain_skip(self) -> None:
         self.fx.implementation_item(
@@ -1352,6 +1437,7 @@ class FixLoopHandoffTests(PrCiGreenTestCase):
     """The gate on apply-fixes: the worker records the commit it hands to re-review."""
 
     def test_recorded_commit_at_the_pull_request_head_with_green_checks_passes(self) -> None:
+        self.fx.retag_head()  # an untagged head is judged on its checks (a tagged one defers, gc-q0y5zw)
         self.fx.fix_loop(commit=self.fx.head, branch=BRANCH)
         self.fx.pulls([self.fx.pull()])
         self.fx.checks([check_run("ci-gate")])
@@ -1392,6 +1478,7 @@ class FixLoopHandoffTests(PrCiGreenTestCase):
         self.assert_fail(self.fx.run(), "head mismatch", newer[:12], self.fx.head[:12])
 
     def test_recorded_commit_without_a_branch_finds_the_pull_request_by_commit(self) -> None:
+        self.fx.retag_head()  # an untagged head is judged on its checks (a tagged one defers, gc-q0y5zw)
         self.fx.fix_loop(commit=self.fx.head)
         self.fx.commit_pulls([self.fx.pull(number=2, head=self.fx.head, state="closed"), self.fx.pull(number=7)])
         self.fx.checks([check_run("ci-gate", status="in_progress", conclusion=None)])
@@ -1399,6 +1486,7 @@ class FixLoopHandoffTests(PrCiGreenTestCase):
         self.assert_fail(self.fx.run(), f"{REPO}#7 head {self.fx.head[:12]}", "PENDING ci-gate")
 
     def test_recorded_branch_that_has_no_pull_request_falls_back_to_the_commit(self) -> None:
+        self.fx.retag_head()  # an untagged head is judged on its checks (a tagged one defers, gc-q0y5zw)
         self.fx.fix_loop(commit=self.fx.head, branch="local-name-only")
         self.fx.pulls([], branch="local-name-only")
         self.fx.commit_pulls([self.fx.pull(number=7)])
@@ -1596,23 +1684,25 @@ class ImplementationHandoffChainTests(PrCiGreenTestCase):
             },
         )
 
-    def test_valid_summary_and_green_checks_pass_both_gates(self) -> None:
-        self.fx.checks([check_run("ci-gate")])
-
+    def test_valid_summary_and_a_draft_pull_request_at_the_skip_ci_checkpoint_pass_both_gates(self) -> None:
+        # The ancestor gate requires the tagged checkpoint; the CI gate then defers
+        # to publish even though a draft pull request already exists (gc-q0y5zw).
         result = self.run_chain()
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("build artifact valid", result.stdout)
-        self.assertIn("pr-ci-green: PASS", result.stdout)
+        self.assertIn("pr-ci-green: reviewer-first: CI deferred to publish", result.stdout)
+        self.assertIn(f"draft pull request {REPO}#7", result.stdout)
 
-    def test_valid_summary_with_red_checks_fails(self) -> None:
-        self.fx.checks([check_run("ci-gate", conclusion="failure")])
+    def test_valid_summary_with_a_ready_pull_request_at_the_checkpoint_fails(self) -> None:
+        self.fx.pulls([self.fx.pull(draft=False)])
+        self.fx.checks([])
 
         result = self.run_chain()
 
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("build artifact valid", result.stdout)
-        self.assertIn("FAILED  ci-gate (failure)", result.stderr)
+        self.assertIn("draft", result.stderr)
 
     def test_invalid_summary_fails_before_github_is_asked(self) -> None:
         self.summary.write_text(self.SUMMARY.replace("status: approved", "status: bogus"), encoding="utf-8")
@@ -1635,8 +1725,7 @@ class ImplementationHandoffChainTests(PrCiGreenTestCase):
         self.assertIn("pr-ci-green: skipped: no publishing intent", result.stdout)
 
     def test_no_verdict_from_the_ci_gate_is_passed_through_not_turned_into_a_failure(self) -> None:
-        self.fx.checks([check_run("ci-gate")])
-        self.fx.route_error(self.fx.check_runs_path(), "gh: Server Error (HTTP 502)")
+        self.fx.route_error(f"repos/{REPO}/pulls?head=acme:{BRANCH}&state=open&per_page=100", "gh: Server Error (HTTP 502)")
 
         result = self.run_chain(env={"PR_CI_GREEN_INFRA_BUDGET_SECONDS": "1"})
 
