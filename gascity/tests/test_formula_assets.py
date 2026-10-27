@@ -3757,6 +3757,22 @@ class FormulaAssetTests(unittest.TestCase):
             with self.subTest(contract=rel):
                 self.assertIn("Contract: `gc.work_dir` is the launcher rig root, not the implementation worktree.", self._prose(rel))
 
+    def test_live_browser_proofs_on_one_stack_run_as_one_invocation(self) -> None:
+        # gcas-nebyde6: three specs run one at a time took 75 minutes in one pass.
+        plan = self._prose("fix-loop-base/plan-fixes.md")
+        for fragment in (
+            "prescribe ONE invocation naming all the specs",
+            "never N serial invocations",
+            "Results are recorded per spec from the single report",
+            "host-wide test slot (gcas-9bh5wjk)",
+        ):
+            with self.subTest(file="plan-fixes.md", fragment=fragment):
+                self.assertIn(fragment, plan)
+        apply_fixes = self._prose("fix-loop-base/apply-fixes.md")
+        for fragment in ("as the plan batched them", "merge them into one invocation and say so in the repair summary"):
+            with self.subTest(file="apply-fixes.md", fragment=fragment):
+                self.assertIn(fragment, apply_fixes)
+
     def test_plan_review_rejects_happy_path_only_checks(self) -> None:
         for rel in ("build-from-plan-base/plan-review.md", "build-basic/plan-review.md"):
             review = self._prose(rel)

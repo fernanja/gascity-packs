@@ -73,6 +73,9 @@ checkpoint push. It opens no pull request and waits for no CI:
    real-server suites: the re-reviewer verifies at the rig's configured
    breadth (`review_verification_scope`), and CI and the weekly run cover the
    full matrix.
+   Run the plan's live browser proofs as the plan batched them; when the plan
+   lists several against the same stack separately, merge them into one
+   invocation and say so in the repair summary (gcas-nebyde6).
 2. Commit on the branch under repair. The subject of the fix commit (the head
    of the branch) carries the tag `[skip ci]`, for example
    `fix: keep row taps on phones [skip ci]`. GitHub skips the push and

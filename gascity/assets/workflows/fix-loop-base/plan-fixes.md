@@ -37,6 +37,15 @@ Plan each fix at the level of the mechanism, not the instance the review named.
   gcas-h90y68w, gcas-qe32i81 and gcas-3msxtwu, fix-loop deep dive 2026-10-22).
   When you cannot find the gate's timeout, do not invent a smaller one:
   prescribe no bound and say so.
+- When two or more of the plan's proofs are live browser (Playwright) runs
+  against the same running stack, prescribe ONE invocation naming all the specs
+  (`npx playwright test <spec> <spec> ...`, or the rig's equivalent such as the
+  preflight stage that takes a spec list), never N serial invocations. One
+  process parallelises its workers safely; N processes on one stack are not,
+  and run one after the other they cost the sum of their set-up and run time
+  (gcas-nebyde6: three specs run one at a time took 75 minutes in one pass).
+  Results are recorded per spec from the single report. The plan may still name
+  the rig's host-wide test slot (gcas-9bh5wjk) for concurrency across sessions.
 - List what the fix deliberately does not cover, so the re-review can judge
   that boundary instead of discovering it.
 
