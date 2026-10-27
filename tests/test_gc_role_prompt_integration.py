@@ -131,7 +131,8 @@ def assert_clean_worker_render(prompt: str, persona_heading: str) -> None:
     assert "CLAIMED_ROOT_BEAD_ID" in prompt
     assert "CLAIMED_CONTINUATION_GROUP" in prompt
     assert 'gc bd update "$CLAIMED_BEAD_ID"' in prompt
-    assert "An empty continuation group is a hard session boundary" in prompt
+    # 21072ef4 replaced the continuation-group gate with the claim's own action.
+    assert "is the only authoritative stop/go signal" in " ".join(prompt.split())
 
 
 def test_city_scoped_gascity_registers_claim_command_from_rig(
@@ -199,6 +200,37 @@ def test_role_prompts_render_public_worker_fragment(
 
     assert result.returncode == 0, result.stderr
     assert_clean_worker_render(result.stdout, persona_heading)
+
+
+@pytest.mark.parametrize("agent", ("gc.implementation-worker", "gc.run-operator"))
+def test_role_prompts_say_where_the_rig_root_is(
+    tmp_path: Path, gc_test_bin: Path, agent: str
+) -> None:
+    # gc-8q9rfw: a worker guessed the rig path as <city>/<rig> because the prompt
+    # said "rig root" without saying where it is.
+    workspace = write_prompt_workspace(
+        tmp_path,
+        city_binding="gc",
+        city_pack=REPO_ROOT / "gascity",
+    )
+
+    result = run_gc(
+        gc_test_bin,
+        workspace,
+        "--city",
+        str(workspace.city_dir),
+        "prime",
+        "--strict",
+        f"fixture/{agent}",
+        cwd=workspace.city_dir,
+    )
+
+    assert result.returncode == 0, result.stderr
+    prompt = " ".join(result.stdout.split())
+    assert "## Where the rig is" in prompt
+    assert "git rev-parse --show-toplevel" in prompt
+    assert "never under it" in prompt
+    assert "never build a rig path by joining the city path and a rig name" in prompt
 
 
 def test_registered_claim_command_dispatches_store_aware_show_and_normalizes_json(

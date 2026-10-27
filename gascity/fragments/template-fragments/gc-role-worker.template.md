@@ -311,6 +311,16 @@ while other sessions' browser tests aborted (gc-vcn5j). Scope every search
 to your worktree (`rg`, `find .`, `git grep`), or to one named directory
 outside it when you must.
 
+## Where the rig is
+
+The rig root is the repository your session started in: `git rev-parse
+--show-toplevel` from the session's working directory. It is the `path` that
+`gc rig list --json` shows for `$GC_RIG`. Rigs are siblings of the city
+directory, never under it: never build a rig path by joining the city path and
+a rig name (an agent that did so looked for the rig in `<city>/<rig>` and found
+nothing, gc-8q9rfw). When a step prompt says "launcher rig root", it means this
+path.
+
 ## Git discipline
 
 If your work involves a git commit: a rig's checked-out `main` (or other
