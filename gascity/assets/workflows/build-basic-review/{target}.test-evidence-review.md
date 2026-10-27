@@ -16,6 +16,8 @@ worktree, write an iterate finding against review setup.
 
 Contract: `gc.work_dir` is the launcher rig root, not the implementation worktree.
 
+When the root carries no `gc.work_dir`, the launcher rig root is the rig named by `gc.var.rig_name` on the root (`gc rig list --json` path), which is your session's `git rev-parse --show-toplevel`; use that and do not derive it from `--git-common-dir`.
+
 Accept a fix for an intermittent or timing failure only with evidence that
 the pre-fix code fails and the post-fix code passes under the same
 reproduction method (throttling, repeats, a stress harness; the repo's

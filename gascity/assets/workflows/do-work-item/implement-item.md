@@ -12,6 +12,8 @@ worktree recorded on the source anchor, run `cd "$WORKTREE"`, and verify
 `pwd -P` equals `$WORKTREE` before any source read, source edit, test, file
 hash, `git add`, or `git commit`.
 
+When the root carries no `gc.work_dir`, the launcher rig root is the rig named by `gc.var.rig_name` on the root (`gc rig list --json` path), which is your session's `git rev-parse --show-toplevel`; use that and do not derive it from `--git-common-dir`.
+
 The launcher checkout's `main` is never a valid commit target, including
 under pressure to unblock validation. If verification needs code that
 appears unreachable from `main` (an earlier item's commit orphaned, a

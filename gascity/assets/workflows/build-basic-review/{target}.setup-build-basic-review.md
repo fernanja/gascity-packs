@@ -26,6 +26,8 @@ legacy `<launcher-root>/worktrees/<source-anchor-id>`; if either exists and is
 a git worktree, record that recovered worktree and include a setup warning in
 the context.
 
+When the root carries no `gc.work_dir`, the launcher rig root is the rig named by `gc.var.rig_name` on the root (`gc rig list --json` path), which is your session's `git rev-parse --show-toplevel`; use that and do not derive it from `--git-common-dir`.
+
 If neither path exists, recover the worktree instead of failing. The engine keeps
 an item worktree until the workflow root closes (gc-9ciduc), so a missing one is
 the exception: a reaper pass from before that fix, or a host reboot. It is still

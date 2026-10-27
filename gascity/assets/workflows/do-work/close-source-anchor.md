@@ -52,6 +52,8 @@ root, not the implementation worktree. If the source anchor `work_dir` is
 missing or equals the launcher root, fail this step instead of closing the
 source anchor.
 
+When the root carries no `gc.work_dir`, the launcher rig root is the rig named by `gc.var.rig_name` on the root (`gc rig list --json` path), which is your session's `git rev-parse --show-toplevel`; use that and do not derive it from `--git-common-dir`.
+
 If the worktree does not contain the recorded implementation commit, do not
 fail immediately: a squash-merge repo discards the pre-squash commit SHA on
 merge, so "commit not found" alone does not mean the work is missing. Search

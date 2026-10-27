@@ -127,6 +127,8 @@ Fix every reported error in the report until it prints `build artifact
 valid`: the validator's failures belong in this step's log, never in a later
 step's or a human's (gc-d09g6).
 
+When the root carries no `gc.work_dir`, the launcher rig root is the rig named by `gc.var.rig_name` on the root (`gc rig list --json` path), which is your session's `git rev-parse --show-toplevel`; use that and do not derive it from `--git-common-dir`.
+
 **This step's own claimed bead.** The final report is this step's work
 product. Once a final report that validates is written and the terminal
 metadata is on the workflow root, close this bead with `gc.outcome=pass`:

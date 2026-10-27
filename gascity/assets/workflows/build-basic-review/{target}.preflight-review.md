@@ -18,6 +18,8 @@ iterate finding against review setup instead of guessing a location.
 
 Contract: `gc.work_dir` is the launcher rig root, not the implementation worktree.
 
+When the root carries no `gc.work_dir`, the launcher rig root is the rig named by `gc.var.rig_name` on the root (`gc rig list --json` path), which is your session's `git rev-parse --show-toplevel`; use that and do not derive it from `--git-common-dir`.
+
 For each implementation worktree listed in the review context:
 
 1. `cd "$WORKTREE"` and verify `pwd -P` equals that worktree before running

@@ -18,6 +18,8 @@ launch time) and every wait or hand-back already explained (gc-ndjvd). Resolve a
 artifact root against the launcher rig root in `gc.work_dir`. Then read the
 workflow root.
 
+When the root carries no `gc.work_dir`, the launcher rig root is the rig named by `gc.var.rig_name` on the root (`gc rig list --json` path), which is your session's `git rev-parse --show-toplevel`; use that and do not derive it from `--git-common-dir`.
+
 If `gc.build.repair_status` on the workflow root is already terminal, nothing
 is left to decide: `not_needed` (the review was approved and no loop ran)
 closes this step with `gc.outcome=pass`; `repairable` or `blocked` (recorded

@@ -128,6 +128,8 @@ checks a recorded one.
 
 ## The repair summary
 
+When the root carries no `gc.work_dir`, the launcher rig root is the rig named by `gc.var.rig_name` on the root (`gc rig list --json` path), which is your session's `git rev-parse --show-toplevel`; use that and do not derive it from `--git-common-dir`.
+
 Every pass of this step, fixed or blocked, ends with one artifact: the repair
 summary, `repair-summary-<claimed-step-id>.md` in the build's artifact root,
 which is the directory of `{{findings_path}}` (the review report this loop

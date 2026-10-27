@@ -23,6 +23,8 @@ After resolving `WORKTREE`, run `cd "$WORKTREE"` and verify `pwd -P` equals
 `git commit`. If a command uses the launcher checkout path for source edits,
 verification, hashes, or commits, the step is invalid and must fail.
 
+When the root carries no `gc.work_dir`, the launcher rig root is the rig named by `gc.var.rig_name` on the root (`gc rig list --json` path), which is your session's `git rev-parse --show-toplevel`; use that and do not derive it from `--git-common-dir`.
+
 Do not edit files in the launcher checkout. Implement only the owned source
 anchor boundary, run sandboxed verification from inside the worktree, and make a
 focused commit in the worktree. Leave the source anchor open for

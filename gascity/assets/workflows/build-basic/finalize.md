@@ -116,6 +116,8 @@ in a later step's). Then set the claimed step outcome with
 with `gc bd close "<claimed-step-id>" --reason "<concise reason>"`. Do not pass
 `--metadata` or `--set-metadata` to `gc bd close`.
 
+When the root carries no `gc.work_dir`, the launcher rig root is the rig named by `gc.var.rig_name` on the root (`gc rig list --json` path), which is your session's `git rev-parse --show-toplevel`; use that and do not derive it from `--git-common-dir`.
+
 Do not publish from this step.
 
 Validating inputs: every artifact this step reads is validated with the

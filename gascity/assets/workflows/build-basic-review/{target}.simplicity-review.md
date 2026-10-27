@@ -15,6 +15,8 @@ command.
 
 Contract: `gc.work_dir` is the launcher rig root, not the implementation worktree.
 
+When the root carries no `gc.work_dir`, the launcher rig root is the rig named by `gc.var.rig_name` on the root (`gc rig list --json` path), which is your session's `git rev-parse --show-toplevel`; use that and do not derive it from `--git-common-dir`.
+
 Write findings under the build artifact root. Required findings must be tied to
 specific changed files or artifacts and must explain the smallest useful fix.
 

@@ -12,6 +12,8 @@ or commits. `gc.work_dir` is the launcher rig root, not the implementation
 worktree. When reading beads with `gc bd show --json`, handle both an object and a
 one-element list before reading metadata.
 
+When the root carries no `gc.work_dir`, the launcher rig root is the rig named by `gc.var.rig_name` on the root (`gc rig list --json` path), which is your session's `git rev-parse --show-toplevel`; use that and do not derive it from `--git-common-dir`.
+
 The launcher checkout's `main` is never a valid commit target, including under
 pressure to unblock validation. If verification needs code that appears
 unreachable from `main` (an earlier item's commit orphaned, a sibling

@@ -3717,6 +3717,46 @@ class FormulaAssetTests(unittest.TestCase):
                 with self.subTest(file=rel, fragment=fragment):
                     self.assertIn(fragment, text)
 
+    WORK_DIR_FALLBACK = (
+        "When the root carries no `gc.work_dir`, the launcher rig root is the rig named by "
+        "`gc.var.rig_name` on the root (`gc rig list --json` path), which is your session's "
+        "`git rev-parse --show-toplevel`; use that and do not derive it from `--git-common-dir`."
+    )
+
+    def test_every_reader_of_the_root_work_dir_has_the_same_fallback(self) -> None:
+        # gc-lyafss: the root carries no gc.work_dir, and an agent derived the rig root from --git-common-dir.
+        readers = (
+            "artifact-validation.md",
+            "build-base/finalize.md",
+            "build-base/summarize-implementation.md",
+            "implement/summarize.md",
+            "build-basic/finalize.md",
+            "build-from-review-base/finalize.md",
+            "build-from-review-base/decide-repair.md",
+            "build-from-review-base/repair-review.md",
+            "fix-loop-base/apply-fixes.md",
+            "do-work/implement.md",
+            "do-work-item/implement-item.md",
+            "implementation-base/implement.md",
+            "implementation-item-base/implement-item.md",
+            "do-work/close-source-anchor.md",
+            *(f"build-basic-review/{{target}}.{name}.md" for name in (
+                "acceptance-review",
+                "simplicity-review",
+                "test-evidence-review",
+                "preflight-review",
+                "apply-review-findings",
+                "synthesize-review",
+                "setup-build-basic-review",
+            )),
+        )
+        for rel in readers:
+            with self.subTest(file=rel):
+                self.assertIn(self.WORK_DIR_FALLBACK, self._prose(rel))
+        for rel in readers[14:-1]:
+            with self.subTest(contract=rel):
+                self.assertIn("Contract: `gc.work_dir` is the launcher rig root, not the implementation worktree.", self._prose(rel))
+
     def test_plan_review_rejects_happy_path_only_checks(self) -> None:
         for rel in ("build-from-plan-base/plan-review.md", "build-basic/plan-review.md"):
             review = self._prose(rel)

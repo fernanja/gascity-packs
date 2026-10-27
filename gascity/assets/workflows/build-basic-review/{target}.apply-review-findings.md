@@ -54,6 +54,8 @@ is explicit.
 
 Contract: `gc.work_dir` is the launcher rig root, not the implementation worktree.
 
+When the root carries no `gc.work_dir`, the launcher rig root is the rig named by `gc.var.rig_name` on the root (`gc rig list --json` path), which is your session's `git rev-parse --show-toplevel`; use that and do not derive it from `--git-common-dir`.
+
 When this pass changes code or tests, hand the result to the next review and to
 publish by local commit (gc-185gyl: a fix pass advanced the branch while the
 workflow root kept the pre-fix commit, and publish named the wrong one). A

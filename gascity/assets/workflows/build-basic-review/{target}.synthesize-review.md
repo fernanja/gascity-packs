@@ -16,6 +16,8 @@ file.
 
 Contract: `gc.work_dir` is the launcher rig root, not the implementation worktree.
 
+When the root carries no `gc.work_dir`, the launcher rig root is the rig named by `gc.var.rig_name` on the root (`gc rig list --json` path), which is your session's `git rev-parse --show-toplevel`; use that and do not derive it from `--git-common-dir`.
+
 Name the subject the synthesis judged, on one line, `Subject: <sha> on
 <branch>`: the sha is `git -C <implementation worktree> rev-parse HEAD`,
 resolved when you write the synthesis, and the finalize step compares it with

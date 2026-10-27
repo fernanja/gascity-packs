@@ -50,6 +50,8 @@ such a step, from the launcher rig root (`gc.work_dir` on the workflow root):
 GC_BEAD_ID=<claimed-step-id> "$(gc formula list --json | python3 -c 'import json,os,sys; c=[os.path.join(os.path.dirname(p),"assets/scripts/checks/build-artifact-valid.sh") for p in json.load(sys.stdin)["search_paths"]]; print([p for p in c if os.path.isfile(p)][-1])')"
 ```
 
+When the root carries no `gc.work_dir`, the launcher rig root is the rig named by `gc.var.rig_name` on the root (`gc rig list --json` path), which is your session's `git rev-parse --show-toplevel`; use that and do not derive it from `--git-common-dir`.
+
 A consuming step (a `prepare-*` gate, finalize) validates each input it reads
 with the command line above and the id from the table, and fails closed on a
 non-zero exit: an approved artifact that does not validate stops the build at

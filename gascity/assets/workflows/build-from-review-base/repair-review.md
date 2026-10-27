@@ -191,6 +191,7 @@ its claim instead of waiting:
    it. Resolve a relative artifact root against the launcher rig root in
    `gc.work_dir`. The journal is the first thing a resuming operator reads
    (above), and `decide-repair` counts attempts from it.
+   When the root carries no `gc.work_dir`, the launcher rig root is the rig named by `gc.var.rig_name` on the root (`gc rig list --json` path), which is your session's `git rev-parse --show-toplevel`; use that and do not derive it from `--git-common-dir`.
 4. Block `decide-repair` on the loop root. Find the `decide-repair` step bead
    by walking this step's dependents two hops:
    `gc bd dep list "<claimed-step-id>" --direction=up --json` lists the
