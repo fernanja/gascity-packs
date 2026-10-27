@@ -4473,11 +4473,13 @@ class FormulaAssetTests(unittest.TestCase):
             with self.subTest(asset="setup", fragment=fragment):
                 self.assertIn(fragment, setup)
 
-        # gc-s01jec: the engine reaps an item worktree when its work-item bead closes, so
-        # setup must rebuild it from the recorded hand-off commit and pin it, not fail.
+        # gc-s01jec: an item worktree can still be missing (the engine keeps it until the
+        # root closes, gc-9ciduc), so setup must rebuild it from the recorded hand-off
+        # commit and pin it, not fail.
         flat = " ".join(setup.split())
         for fragment in (
             "recover the worktree instead of failing",
+            "keeps an item worktree until the workflow root closes (gc-9ciduc), so a missing one is the exception",
             "gc.build.handoff_commit",
             "worktree add --detach <path> <commit>",
             "set `work_dir=<path>` on the workflow root and on the source anchor",

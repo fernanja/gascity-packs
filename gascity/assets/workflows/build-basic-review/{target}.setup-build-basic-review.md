@@ -26,9 +26,10 @@ legacy `<launcher-root>/worktrees/<source-anchor-id>`; if either exists and is
 a git worktree, record that recovered worktree and include a setup warning in
 the context.
 
-If neither path exists, recover the worktree instead of failing. The engine reaps
-an item worktree when its work-item bead closes, so a missing worktree is the
-normal state at review time, not a defect (gc-s01jec). Read the workflow root's
+If neither path exists, recover the worktree instead of failing. The engine keeps
+an item worktree until the workflow root closes (gc-9ciduc), so a missing one is
+the exception: a reaper pass from before that fix, or a host reboot. It is still
+not a defect; recover it as follows (gc-s01jec). Read the workflow root's
 `gc.build.handoff_commit` and `gc.build.handoff_branch`. Fetch origin in the
 launcher repo and confirm the commit exists (`git -C <launcher-root> cat-file -e
 <commit>^{commit}`). Then create the worktree at
