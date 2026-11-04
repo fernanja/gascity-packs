@@ -80,12 +80,18 @@ command -v git >/dev/null 2>&1 || fail "git is required on PATH"
 [ -n "${GC_BEAD_ID:-}" ] || fail "GC_BEAD_ID is required"
 
 # bead_meta <bead-id> <key>...: print one value per line, empty when unset.
+# stdout and stderr are kept apart: gc writes advisories to stderr even on a
+# successful read (gc 1.5.1 prints a [session] setup_max_timeout advisory and
+# "gc bd: answering from the <scope> store" on every call), and merging them
+# into the JSON made this gate fail its parse on every implement step
+# (gcas-98x45ac, 2026-11-04). stderr is kept only for the INFRA message.
 bead_meta() {
-  local id="$1" out="" attempt
+  local id="$1" out="" err="" attempt err_file
   shift
+  err_file="$(mktemp -t handoff-ancestor.XXXXXX)" || fail "mktemp failed"
   for attempt in 1 2 3; do
-    if out="$(gc bd show "$id" --json 2>&1)"; then
-      printf '%s' "$out" | python3 -c '
+    if out="$(gc bd show "$id" --json 2>"$err_file")"; then
+      if printf '%s' "$out" | python3 -c '
 import json, sys
 data = json.load(sys.stdin)
 bead = data[0] if isinstance(data, list) else data
@@ -93,11 +99,16 @@ meta = bead.get("metadata") or {}
 for key in sys.argv[1:]:
     value = meta.get(key, "")
     print(str(value).strip().replace("\n", " "))
-' "$@" && return 0
+' "$@"; then
+        rm -f "$err_file"
+        return 0
+      fi
     fi
+    err="$(head -c 200 "$err_file" 2>/dev/null)"
     sleep "${HANDOFF_ANCESTOR_RETRY_SLEEP_SECONDS:-2}"
   done
-  infra "gc bd show $id failed: $(printf '%s' "$out" | head -c 200)"
+  rm -f "$err_file"
+  infra "gc bd show $id failed: ${err:-$(printf '%s' "$out" | head -c 200)}"
 }
 
 # Assigning from a command substitution keeps `infra`'s exit 75 (a process
