@@ -3245,6 +3245,32 @@ class FormulaAssetTests(unittest.TestCase):
                 self.assertIn("gc-zb2a13", text)
                 self.assertIn(fragment, text)
 
+    def test_publish_pushes_survive_session_restarts(self) -> None:
+        # gc-20q5b1: gcas-3v4jtrk's publish lost five session-bound pushes to
+        # publisher restarts mid pre-push hook while the approved head was
+        # already remote and only the run-CI commit was missing.
+        root = pathlib.Path(__file__).resolve().parents[1]
+        for formula_name in ("build-from-plan", "build-from-decompose", "build-from-review"):
+            text = " ".join(rendered_step_text(root, formula_name, "publish").split())
+            for fragment in (
+                "a detached `git push` otherwise (gc-20q5b1).**",
+                'gh api repos/<owner>/<repo>/git/commits -f message="chore: run CI (<source-bead-id>)" -f tree="$TREE" -f "parents[]=$HEAD"',
+                'gh api -X PATCH repos/<owner>/<repo>/git/refs/heads/<branch> -f sha="$NEW"',
+                "never write a skip-CI tag anywhere in it",
+                "Never add `force=true` to the PATCH",
+                "nohup bash -c \'trap \"\" HUP; git push origin HEAD:refs/heads/<branch>",
+                "& disown",
+                'export LOG="$GC_CITY/.gc/worktrees/$GC_RIG-scratch/publish-<claimed-step-id>.log"',
+                "After ANY session restart, never retry blind",
+            ):
+                with self.subTest(formula=formula_name, fragment=fragment):
+                    self.assertIn(fragment, text)
+            # Decide the push path before building the scratch worktree.
+            self.assertLess(text.index("(gc-20q5b1).**"), text.index("Where to push from (gc-mpaqx)"))
+        helper = " ".join((root / "assets" / "workflows" / "publish" / "push.md").read_text(encoding="utf-8").split())
+        self.assertIn("gc-20q5b1", helper)
+        self.assertIn("`nohup`", helper)
+
     def test_github_issue_fix_publish_pr_gates_ready_on_ci_runs(self) -> None:
         # gc-0b5dqe: same hazard as gc-zb2a13 / fernanja/ascent_app#2786. With
         # pr_mode=ready the publish-pr step must not open the PR ready on a

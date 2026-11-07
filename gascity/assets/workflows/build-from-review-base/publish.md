@@ -104,6 +104,55 @@ right commit without checking. Follow this protocol exactly:
    closing -- this is the sha a PR title/body may truthfully claim as
    published and the sha CI runs on.
 
+**How to push: an API commit when the remote already holds the approved
+head, a detached `git push` otherwise (gc-20q5b1).** A push through the
+pre-push hook takes 7 to 30 minutes, and a publisher session restart kills a
+session-bound push mid-hook: the publish for gcas-3v4jtrk lost five pushes
+that way (the hook's contract check ended with SIGTERM, exit 143) while the
+approved commit was already on the remote and only the empty run-CI commit
+was missing.
+
+- When `git ls-remote origin <branch>` already equals
+  `gc.build.review_subject_commit` and step 3 found that only the empty
+  run-CI commit is needed, make that commit through the GitHub API with the
+  approved commit's tree, and move the branch to it. No local `git push`, no
+  scratch worktree, no pre-push hook (the tree is the one review approved):
+
+  ```sh
+  HEAD=$(gh api repos/<owner>/<repo>/git/ref/heads/<branch> --jq .object.sha); TREE=$(gh api repos/<owner>/<repo>/git/commits/$HEAD --jq .tree.sha)
+  NEW=$(gh api repos/<owner>/<repo>/git/commits -f message="chore: run CI (<source-bead-id>)" -f tree="$TREE" -f "parents[]=$HEAD" --jq .sha)
+  gh api -X PATCH repos/<owner>/<repo>/git/refs/heads/<branch> -f sha="$NEW"
+  ```
+
+  `$HEAD` must equal `gc.build.review_subject_commit`; stop if it does not.
+  The message is exactly `chore: run CI (<source-bead-id>)`: never write a
+  skip-CI tag anywhere in it, not even quoted or negated, because GitHub
+  matches the text wherever it appears. Never add `force=true` to the PATCH:
+  without it GitHub accepts only a fast-forward. Confirm with
+  `git ls-remote origin <branch>` that the tip is `$NEW`, record it as
+  `gc.build.publish_pushed_commit`, and say in the close reason that no
+  pre-push hook ran because the commit was made through the API.
+- Every other push is a local `git push` from the scratch worktree below, run
+  detached from the session so a restart cannot kill the hook. Use the
+  implementation worker's recipe, with the log at a fixed path a restarted
+  session can find:
+
+  ```bash
+  export LOG="$GC_CITY/.gc/worktrees/$GC_RIG-scratch/publish-<claimed-step-id>.log"
+  nohup bash -c 'trap "" HUP; git push origin HEAD:refs/heads/<branch> > "$LOG" 2>&1; echo "rc=$?" >> "$LOG"' > /dev/null 2>&1 & disown
+  sleep 2; head -1 "$LOG"            # assert it started; then poll the log, never the process
+  ```
+
+  Poll the log until its last line is `rc=<n>`; `rc=0` means the push
+  landed. Never `launchctl submit`, never a harness background task for a
+  push, never `git push --no-verify`. After ANY session restart, never retry
+  blind: read the log first (no `rc=` line yet means the push is still
+  running), then re-verify from the remote with `git ls-remote origin
+  <branch>` and `gh run list --commit <sha>`, because the earlier attempt may
+  have landed. If the remote now holds the approved head and only the run-CI
+  commit is missing, take the API path above. Remove the log with the
+  worktree before closing.
+
 Where to push from (gc-mpaqx): never the implementation worktree. It belongs
 to a closed bead and the engine may already have removed it; the approved
 commit is still in the repository. When step 4 needs a push, make your own
