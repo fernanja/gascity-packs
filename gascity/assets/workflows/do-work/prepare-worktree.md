@@ -22,8 +22,15 @@ setup only. Do not edit source files in the launcher checkout.
    policy for the resolved source anchor.
 4. Create or reuse a deterministic git worktree at
    `$GC_CITY/.gc/worktrees/$GC_RIG/<source-anchor-id>` (create the parent
-   directory with `mkdir -p` first; hard-fail if `$GC_CITY` or `$GC_RIG` is
-   unset). This is the city-managed layout swept by the daemon's closed-bead
+   directory with `mkdir -p` first; hard-fail if `$GC_CITY` is unset). If
+   `$GC_RIG` is unset or empty, do not hard-fail: derive the rig. Take the
+   bead prefix of the source anchor id (the text before its first `-`) and
+   find the one rig with that prefix in `gc rig list --json`; when `pwd -P`
+   is under `$GC_CITY/.gc/worktrees/<name>/`, `<name>` must name the same
+   rig. When exactly one rig results, start every shell command of this step
+   with `export GC_RIG=<rig>;` and write `GC_RIG derived: <rig>` in the
+   step's close reason. Hard-fail only when no rig or more than one rig
+   results, or the two sources disagree. This is the city-managed layout swept by the daemon's closed-bead
    worktree reaper (`[daemon] auto_reap_closed_bead_worktrees`); worktrees at
    the former `$(pwd)/worktrees/<source-anchor-id>` rig-root location are
    outside the reaper's scope and accumulate forever. Base the worktree on
