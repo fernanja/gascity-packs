@@ -184,7 +184,9 @@ LANE_STATUS="$(printf '%s\n' "$MATCHES" | jq -r \
 
 if [ "$VERDICT" != "done" ]; then
   case "$VERDICT" in
-    approved|pass)
+    # "approve" is the word the lane verdicts use (see approved() above); a fix pass that records it for
+    # code_review.verdict means the same as done. Rejecting it looped an approved build to max attempts.
+    approved|approve|pass)
       ;;
     "")
       if [ "$LANE_STATUS" = "approved" ]; then

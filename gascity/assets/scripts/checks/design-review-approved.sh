@@ -79,7 +79,7 @@ VERDICT=$(
 )
 
 case "$VERDICT" in
-    done|approved|pass)
+    done|approved|approve|pass)
         echo "Design review approved"
         exit 0
         ;;

@@ -7025,6 +7025,34 @@ description = "Override sink that writes the base triage report contract."
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("Implementation review approved", result.stdout)
 
+    def test_implementation_review_check_accepts_the_verdict_word_approve(self) -> None:
+        # A no-op fix pass recorded code_review.verdict=approve (the lane verdicts' word) instead of done;
+        # the check rejected it and an approved build looped to max attempts.
+        show_json = """[
+  {
+    "id": "loop",
+    "metadata": {
+      "gc.root_bead_id": "root",
+      "gc.step_id": "review.build-basic-review-loop"
+    }
+  }
+]"""
+        for word, expected in (("approve", 0), ("approved", 0), ("done", 0), ("iterate", 1)):
+            list_json = """[
+  {
+    "id": "review-fixes",
+    "metadata": {
+      "gc.root_bead_id": "root",
+      "gc.attempt": "1",
+      "gc.ralph_step_id": "review.build-basic-review-loop",
+      "code_review.verdict": "%s"
+    }
+  }
+]""" % word
+            with self.subTest(verdict=word):
+                result = self._run_implementation_review_check(show_json=show_json, list_json=list_json)
+                self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
+
     def test_implementation_review_check_accepts_report_mode_with_report_path(self) -> None:
         show_json = """[
   {
